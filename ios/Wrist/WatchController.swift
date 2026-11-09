@@ -38,6 +38,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         var lastZoneOffset: Int32?
         var lastSnapshotDay = ""
         var lastSync: Date?
+        var lastBattery = Date.distantPast
         init(record: WatchRecord, service: WatchService, raw: RawLog) {
             self.record = record; self.service = service; self.raw = raw
         }
@@ -191,7 +192,14 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
             u.lastSnapshotDay = day
             u.raw.snapshotDatabase()
         }
-        if case .finished = s.progress() { u.lastSync = now }
+        if case .finished = s.progress() {
+            u.lastSync = now
+            // The battery ask right after connecting lands before the handshake ends and is dropped: ask again here.
+            if now.timeIntervalSince(u.lastBattery) >= 600 || (try? s.snapshot())?.battery == nil && now.timeIntervalSince(u.lastBattery) >= 60 {
+                u.lastBattery = now
+                do { try s.pollBattery() } catch { AppLog.log("\(u.record.entity) battery error: \(error)") }
+            }
+        }
     }
 
     private func declareZone(_ u: Unit) {

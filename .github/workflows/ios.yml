@@ -8,6 +8,16 @@ jobs:
     runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}-${{ hashFiles('wpp/src/**', 'wpp-ffi/src/**', 'wpp-store/src/**') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}-
+            cargo-${{ runner.os }}-
       - name: Rust core + Swift bindings
         run: |
           curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
