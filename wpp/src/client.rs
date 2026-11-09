@@ -1122,14 +1122,23 @@ impl Client {
                     actions.extend(walk);
                 }
             }
-            (State::Walking(_), Command::CMD_ERROR) => {
+            (State::Walking(stream), Command::CMD_ERROR) => {
+                let stream = *stream;
                 let busy = frame
                     .objects
                     .iter()
                     .any(|o| matches!(o, WppObject::Cmderror(e) if e.err == Cmderror::ERR_DEVBUSY));
+                // The watch refusing the open stream's own request (an unsupported history type,
+                // e.g. on the ScanWatch 1) ends that stream now instead of waiting out the timeout.
+                let refuses_stream = frame.objects.iter().any(|o| {
+                    matches!(o, WppObject::Cmderror(e) if e.cmd == stream_command(stream.category).0 && e.err != Cmderror::ERR_DEVBUSY)
+                });
                 if busy && self.link.busy_retries < MAX_BUSY_RETRIES {
                     self.link.busy_retries += 1;
                     actions.extend(self.request_current());
+                } else if refuses_stream {
+                    self.streams.done.push((stream.category, stream.through));
+                    actions.extend(self.request_next(received_at));
                 }
             }
             (State::Walking(stream), c) => {
@@ -4010,6 +4019,19 @@ mod tests {
         assert!(client
             .handle(Event::Tick { now: UnixMillis(1_000_000 + SILENCE_TIMEOUT_MS + 1) })
             .is_empty());
+    }
+
+    #[test]
+    fn a_stream_the_watch_refuses_is_skipped_at_once() {
+        let mut client = authenticated();
+        let before = client.current().expect("a stream is open");
+        let cmd = stream_command(before.0).0;
+        let actions = client.handle(Event::Frame {
+            received_at: UnixMillis(5_000),
+            frame: Frame::new(Command::CMD_ERROR, vec![WppObject::Cmderror(Cmderror { cmd, err: -4 })]),
+        });
+        assert!(actions.iter().any(|a| matches!(a, Action::Send(_))), "moves on at once");
+        assert_ne!(client.current(), Some(before));
     }
 
     #[test]
