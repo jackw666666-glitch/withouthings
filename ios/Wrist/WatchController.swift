@@ -233,10 +233,8 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
             do { try s.tick() } catch { AppLog.log("\(u.record.entity) tick error: \(error)") }
             for line in s.unhandledObjects() { AppLog.log("\(u.record.entity) unhandled: \(line)") }
             declareZone(u)
-            if u.record.entity == "scanwatch", !u.scanModeSet {
-                // Breathing scan every night (official "always"), or the watch's own automatic nights.
-                if (try? s.setRespiratoryScanAlways(on: Settings.allDayScan)) != nil { u.scanModeSet = true }
-            }
+            if !u.scanModeSet, (try? s.dropSleepFeatures()) != nil { u.scanModeSet = true }   // never worn in bed
+            runExperiments(u)
         }
         if now.timeIntervalSince(u.lastResync) >= 60 {
             u.lastResync = now
@@ -289,6 +287,20 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
             AppLog.log("scanwatch put on: asking for an SpO2 reading")
             do { try u.service.requestMeasure(category: 3) } catch { AppLog.log("scanwatch SpO2 request error: \(error)") }
         }
+    }
+
+    /// Raw frames the NUC asked for in config.json, sent once each when the watch is synced and idle.
+    private func runExperiments(_ u: Unit) {
+        guard case .finished = u.service.progress(), let list = RemoteConfig.load()?.experiments else { return }
+        let d = UserDefaults.standard
+        var done = Set(d.stringArray(forKey: "experimentsDone") ?? [])
+        for e in list where e.watch == u.record.entity && !done.contains(e.id) {
+            guard let bytes = Data(hexString: e.hex) else { AppLog.log("experiment \(e.id): bad hex"); continue }
+            AppLog.log("experiment \(e.id) -> \(u.record.entity): \(e.hex)")
+            send(u.record.id, [bytes])
+            done.insert(e.id)
+        }
+        d.set(Array(done), forKey: "experimentsDone")
     }
 
     private func declareZone(_ u: Unit) {
@@ -349,7 +361,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         Settings.allDayScan = on
         link.queue.async {
             for u in self.units.values where u.record.entity == "scanwatch" {
-                try? u.service.setRespiratoryScanAlways(on: on)
+                _ = on; try? u.service.dropSleepFeatures()
             }
         }
     }
@@ -420,6 +432,21 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
     fileprivate func coreWantsReconnect(_ id: UUID) { link.drop(id) }
 
     private func ui(_ block: @escaping () -> Void) { DispatchQueue.main.async(execute: block) }
+}
+
+extension Data {
+    init?(hexString: String) {
+        let clean = hexString.replacingOccurrences(of: " ", with: "")
+        guard clean.count % 2 == 0 else { return nil }
+        var out = Data(capacity: clean.count / 2)
+        var i = clean.startIndex
+        while i < clean.endIndex {
+            let j = clean.index(i, offsetBy: 2)
+            guard let b = UInt8(clean[i..<j], radix: 16) else { return nil }
+            out.append(b); i = j
+        }
+        self = out
+    }
 }
 
 private final class ServiceTransport: Transport {

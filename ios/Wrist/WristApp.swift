@@ -197,8 +197,6 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section("Measurements") {
-                    Toggle("All-Day Breathing Scan", isOn: $allDay)
-                        .onChange(of: allDay) { _, on in watch.setAllDayScan(on) }
                     ForEach(features, id: \.id) { f in
                         Toggle(f.name, isOn: Binding(get: { f.enabled }, set: { on in
                             if let id = card?.id { watch.setHealthFeature(id, f.id, on) }

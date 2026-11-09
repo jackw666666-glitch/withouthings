@@ -90,6 +90,14 @@ struct RemoteConfig: Decodable {
     var bmr_kcal: Double?
     /// The watch's user profile (a reset wipes it; calories and distance depend on it).
     var profile: Profile?
+    /// One-off raw frames to send a watch (hex, already framed), run once each by id. Replies land in the raw log.
+    var experiments: [Experiment]?
+
+    struct Experiment: Decodable {
+        var id: String
+        var watch: String
+        var hex: String
+    }
 
     struct Profile: Decodable {
         var birth_secs: Int64?

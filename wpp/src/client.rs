@@ -1138,7 +1138,7 @@ impl Client {
                 // one never runs again. The reference app does the same.
                 actions.extend(self.write_features(received_at));
                 if self.afib_checks {
-                    actions.push(Action::Send(local_notifications_frame(true, true)));
+                    actions.push(Action::Send(local_notifications_frame(true, false)));   // day only: no watch in bed
                 }
                 // Read-only: the watch's automatic heart-rate mode, to learn what it controls.
                 actions.push(Action::Send(Frame::new(Command::CMD_HR_AUTO_ALGORITHM_GET, Vec::new())));

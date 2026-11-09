@@ -147,6 +147,18 @@ impl WatchService {
         self.commit_features(features)
     }
 
+    /// Drop the sleep-only features (SpO2 during sleep = 5, breathing scan = 9 and 11) for a watch
+    /// that is never worn in bed.
+    pub fn drop_sleep_features(&self) -> Result<(), WatchError> {
+        let mut features = self.enabled_features();
+        let before = features.len();
+        features.retain(|f| f.id != FeatureId(5) && f.id != RESPIRATORY_SCAN_MONITORING && f.id != FeatureId(11));
+        if features.len() == before {
+            return Ok(());
+        }
+        self.commit_features(features)
+    }
+
     pub fn hands_calibration_start(&self) -> Result<(), WatchError> {
         let actions = self.inner.lock().unwrap().client.hands_calibration_start(now());
         self.dispatch(actions)
