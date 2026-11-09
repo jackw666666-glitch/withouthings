@@ -2,10 +2,23 @@ import CoreLocation
 import Foundation
 
 /// Keeps Wrist running in the background: iOS doesn't suspend an app that is receiving location
-/// updates. Coarse accuracy (cell / Wi-Fi), so the phone's GPS stays off. Location itself is never used.
+/// updates. Coarse accuracy (cell / Wi-Fi) normally; real GPS only while a workout records a route.
 final class KeepAlive: NSObject, CLLocationManagerDelegate {
     static let shared = KeepAlive()
     private let manager = CLLocationManager()
+    private var tracking = false
+    /// Each fix while a workout is recording a route. Coarse the rest of the time.
+    var onFix: ((CLLocation) -> Void)?
+
+    /// Real GPS during a workout, coarse otherwise. Call from any thread.
+    func setTracking(_ on: Bool) {
+        DispatchQueue.main.async {
+            guard on != self.tracking else { return }
+            self.tracking = on
+            self.manager.desiredAccuracy = on ? kCLLocationAccuracyBest : kCLLocationAccuracyThreeKilometers
+            AppLog.log("keep-alive: route tracking \(on ? "on" : "off")")
+        }
+    }
 
     func start() {
         manager.delegate = self
@@ -29,7 +42,10 @@ final class KeepAlive: NSObject, CLLocationManagerDelegate {
         }
     }
 
-    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {}
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard tracking else { return }
+        locations.forEach { onFix?($0) }
+    }
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         AppLog.log("keep-alive: location error \(error.localizedDescription)")
     }

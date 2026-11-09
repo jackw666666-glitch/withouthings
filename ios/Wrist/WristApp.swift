@@ -218,6 +218,7 @@ struct SettingsView: View {
                     Button("Send Test Notification") { watch.notify(title: "Wrist", message: "Test from Wrist") }
                     if let id = card?.id {
                         NavigationLink("Calibrate Hands") { HandsView(id: id) }
+                        NavigationLink("Watch Screens") { ScreensView(id: id) }
                     }
                     Button("Forget Watch", role: .destructive) { confirmForget = true }
                 }
@@ -268,4 +269,40 @@ struct HandsView: View {
             .frame(maxWidth: .infinity, minHeight: 56)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
     }
+}
+
+// MARK: - Screens
+
+struct ScreensView: View {
+    @EnvironmentObject var watch: WatchController
+    let id: UUID
+    @State private var on: [WatchScreen] = []
+    @State private var off: [WatchScreen] = []
+
+    var body: some View {
+        List {
+            Section("On The Watch") {
+                ForEach(on, id: \.id) { s in
+                    Button(s.name) { off.append(s); on.removeAll { $0.id == s.id }; apply() }
+                }
+                .onMove { from, to in on.move(fromOffsets: from, toOffset: to); apply() }
+            }
+            Section("Hidden") {
+                ForEach(off, id: \.id) { s in
+                    Button(s.name) { on.append(s); off.removeAll { $0.id == s.id }; apply() }
+                }
+            }
+        }
+        .navigationTitle("Watch Screens")
+        .toolbar { EditButton() }
+        .onAppear {
+            watch.loadScreens(id)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                let all = watch.screens(id)
+                on = all.filter(\.enabled); off = all.filter { !$0.enabled }
+            }
+        }
+    }
+
+    private func apply() { watch.setScreens(id, on.map(\.id)) }
 }

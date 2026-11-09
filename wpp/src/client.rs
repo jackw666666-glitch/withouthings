@@ -490,6 +490,16 @@ pub struct FeatureId(pub u16);
 
 /// A feature the watch runs on its own schedule is permanent; one that holds a
 /// sensor on until it is done gets a window the watch expires by itself.
+/// The watch's own alert slots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LocalAlerts {
+    pub afib_day: bool,
+    pub afib_night: bool,
+    pub inactivity: bool,
+    pub hr_high: bool,
+    pub hr_low: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FeatureSchedule {
     Permanent,
@@ -711,8 +721,8 @@ pub struct Client {
     walks: RateLimit,
     dumps: RateLimit,
     wanted_notifications: Option<bool>,
-    /// ScanWatch: turn on the watch's own day and night AFib checks (CMD_LOCAL_NOTIFICATIONS_CONFIG_SET).
-    afib_checks: bool,
+    /// ScanWatch: which of the watch's own alerts are on (CMD_LOCAL_NOTIFICATIONS_CONFIG_SET), re-sent on every connection.
+    local_alerts: Option<LocalAlerts>,
     zone: Option<Zone>,
     /// When the watch was last given the time, and in which zone.
     clock_sent: Option<(UnixMillis, Zone)>,
@@ -744,7 +754,7 @@ impl Client {
             walks: RateLimit::every(MIN_WALK_INTERVAL_MS),
             dumps: RateLimit::every(MIN_DUMP_INTERVAL_MS),
             wanted_notifications: None,
-            afib_checks: false,
+            local_alerts: None,
             zone: None,
             clock_sent: None,
             pending_stop: None,
@@ -781,8 +791,33 @@ impl Client {
         self.noted(now, actions)
     }
 
-    pub fn set_afib_checks(&mut self, on: bool) {
-        self.afib_checks = on;
+    pub fn set_local_alerts(&mut self, alerts: LocalAlerts) {
+        self.local_alerts = Some(alerts);
+    }
+
+    /// Resting heart-rate alert limits (Gadgetbridge PR #7266): a non-zero user id, then low and high.
+    pub fn set_hr_thresholds(&mut self, low: u8, high: u8, now: UnixMillis) -> Vec<Action> {
+        use crate::objects::Threshold as T;
+        let limit = |id: u16, bpm: u8| WppObject::Threshold(T { id, enabled: 1, exponent: 0, value: bpm as i32 });
+        self.noted(now, vec![Action::Send(Frame::new(
+            Command::CMD_THRESHOLDS_SET,
+            vec![
+                WppObject::Id(Id { value: 123456 }),
+                limit(T::ID_HR_LOW, low),
+                limit(T::ID_HR_HIGH, high),
+                WppObject::Null(Null {}),
+            ],
+        ))])
+    }
+
+    /// Ask for the watch's debug dump now (settings database, its log, raw data). It lands in the raw log.
+    pub fn start_debug_dump(&mut self, now: UnixMillis) -> Vec<Action> {
+        if !self.link_quiet() {
+            return Vec::new();
+        }
+        self.dumps.last = Some(now);
+        let actions = self.link.dump.start().into_iter().map(Action::Send).collect();
+        self.noted(now, actions)
     }
 
     /// Hand calibration, as Gadgetbridge drives it: start, any number of moves, stop.
@@ -1137,8 +1172,8 @@ impl Client {
                 // set has to be re-asserted on every connection or a nightly
                 // one never runs again. The reference app does the same.
                 actions.extend(self.write_features(received_at));
-                if self.afib_checks {
-                    actions.push(Action::Send(local_notifications_frame(true, false)));   // day only: no watch in bed
+                if let Some(alerts) = self.local_alerts {
+                    actions.push(Action::Send(local_notifications_frame(alerts)));
                 }
                 // Read-only: the watch's automatic heart-rate mode, to learn what it controls.
                 actions.push(Action::Send(Frame::new(Command::CMD_HR_AUTO_ALGORITHM_GET, Vec::new())));
@@ -1975,7 +2010,7 @@ impl Client {
 /// The five on-watch alert slots, always sent together in the official app's order
 /// (Gadgetbridge PR #7266, from HCI captures): AFib day (1), activity reminder (4),
 /// AFib night (5), high HR (2), low HR (3).
-fn local_notifications_frame(afib_day: bool, afib_night: bool) -> Frame {
+fn local_notifications_frame(alerts: LocalAlerts) -> Frame {
     use crate::objects::LocalNotification as N;
     let slot = |id: u32, on: bool| {
         WppObject::LocalNotification(N { id, status: if on { N::STATUS_ENABLED } else { N::STATUS_DISABLED } })
@@ -1983,11 +2018,11 @@ fn local_notifications_frame(afib_day: bool, afib_night: bool) -> Frame {
     Frame::new(
         Command::CMD_LOCAL_NOTIFICATIONS_CONFIG_SET,
         vec![
-            slot(N::ID_PPG_AFIB, afib_day),
-            slot(N::ID_INACTIVITY, false),
-            slot(N::ID_PPG_AFIB_NIGHT, afib_night),
-            slot(N::ID_HR_HIGH, false),
-            slot(N::ID_HR_LOW, false),
+            slot(N::ID_PPG_AFIB, alerts.afib_day),
+            slot(N::ID_INACTIVITY, alerts.inactivity),
+            slot(N::ID_PPG_AFIB_NIGHT, alerts.afib_night),
+            slot(N::ID_HR_HIGH, alerts.hr_high),
+            slot(N::ID_HR_LOW, alerts.hr_low),
             WppObject::Null(Null {}),
         ],
     )
@@ -4097,7 +4132,7 @@ mod tests {
     #[test]
     fn afib_checks_are_switched_on_with_every_connection() {
         let mut client = Client::new(credentials(), vec![(Stream::Vasistas(8), UnixTime(1000))], Vec::new());
-        client.set_afib_checks(true);
+        client.set_local_alerts(LocalAlerts { afib_day: true, ..LocalAlerts::default() });
         client.handle(Event::Connected { now: UnixMillis(0) });
         let actions = client.handle(Event::Frame {
             received_at: UnixMillis(10),

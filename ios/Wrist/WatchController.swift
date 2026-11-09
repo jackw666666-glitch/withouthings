@@ -1,4 +1,5 @@
 import BackgroundTasks
+import CoreLocation
 import Foundation
 import SwiftUI
 
@@ -43,6 +44,13 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         var lastProfileCheck = Date.distantPast
         var scanModeSet = false
         var burstStartedAt: Date?
+        var limitsSent = false
+        var lastStepPoll = Date.distantPast
+        var lastStepCount: UInt32?
+        var movingPolls = 0
+        var stillPolls = 0
+        var autoWalk = false
+        var flashRunning = false
         var lastBurst = Date.distantPast
         var lastHrMs: Int64 = 0
         init(record: WatchRecord, service: WatchService, raw: RawLog) {
@@ -74,6 +82,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
     override init() {
         super.init()
         link.delegate = self
+        KeepAlive.shared.onFix = { [weak self] loc in self?.recordFix(loc) }
         link.queue.async {
             _ = self.host
             for record in Settings.watches { self.start(record) }
@@ -117,6 +126,20 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         // Give the watches time to answer, then push what arrived.
         link.queue.asyncAfter(deadline: .now() + 12) { self.housekeepingAll() }
         link.queue.asyncAfter(deadline: .now() + 24, execute: finish)
+    }
+
+    private func recordFix(_ loc: CLLocation) {
+        let fix = LocationFix(atMs: Int64(loc.timestamp.timeIntervalSince1970 * 1000),
+                              latE7: Int32(loc.coordinate.latitude * 1e7), lonE7: Int32(loc.coordinate.longitude * 1e7),
+                              altitudeCm: loc.verticalAccuracy >= 0 ? Int32(loc.altitude * 100) : nil,
+                              accuracyCm: Int32(loc.horizontalAccuracy * 100),
+                              speedMmS: loc.speed >= 0 ? Int32(loc.speed * 1000) : nil,
+                              bearingCdeg: loc.course >= 0 ? Int32(loc.course * 100) : nil)
+        link.queue.async {
+            for u in self.units.values where u.burstStartedAt == nil && (try? u.service.snapshot())?.activeWorkout != nil {
+                try? u.service.recordFixes(fixes: [fix])
+            }
+        }
     }
 
     // MARK: pairing
@@ -206,7 +229,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
                                            transport: ServiceTransport(self, record.id), ancs: HostedAncs(host),
                                            rasterizer: WatchRasterizer())
             service.preferNotifications(enabled: true)      // a reset leaves them off
-            if record.entity == "scanwatch" { service.setAfibChecks(on: true) }   // day + night AFib checks
+            applyLocalAlerts(service, record.entity)
             units[record.id] = Unit(record: record, service: service, raw: RawLog(prefix: record.entity, db: record.dbURL))
             link.connect(record.id)
             AppLog.log("started \(record.name) (\(record.entity))")
@@ -240,6 +263,8 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
             runExperiments(u)
             heartRateBurst(u)
             promptForTests(u)
+            walkTracker(u)
+            sendHeartRateLimits(u)
         }
         if now.timeIntervalSince(u.lastResync) >= 60 {
             u.lastResync = now
@@ -300,7 +325,14 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         let d = UserDefaults.standard
         var done = Set(d.stringArray(forKey: "experimentsDone") ?? [])
         for e in list where e.watch == u.record.entity && !done.contains(e.id) {
-            if let f = e.feature {
+            if let action = e.action {
+                AppLog.log("experiment \(e.id) -> \(u.record.entity): \(action)")
+                if action == "debug_dump" {
+                    do { try u.service.startDebugDump() } catch { AppLog.log("debug dump error: \(error)") }
+                } else if action == "flash_read" {
+                    readFlash(u)
+                }
+            } else if let f = e.feature {
                 do {
                     try u.service.setFeature(id: f, windowMinutes: e.window_minutes ?? 0)
                     AppLog.log("experiment \(e.id) -> \(u.record.entity): feature \(f) window \(e.window_minutes ?? 0) min")
@@ -397,6 +429,99 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         }
     }
 
+    /// ScanWatch alert slots: daytime AFib always; heart-rate limits and the move reminder when config has them.
+    private func applyLocalAlerts(_ service: WatchService, _ entity: String) {
+        guard entity == "scanwatch" else { return }
+        let a = RemoteConfig.load()?.alerts
+        let limits = a?.hr_low != nil && a?.hr_high != nil
+        service.setLocalAlerts(afibDay: true, afibNight: false, inactivity: a?.move_reminder ?? false, hrHigh: limits, hrLow: limits)
+    }
+
+    private func sendHeartRateLimits(_ u: Unit) {
+        guard u.record.entity == "scanwatch", !u.limitsSent, case .finished = u.service.progress(),
+              let a = RemoteConfig.load()?.alerts, let low = a.hr_low, let high = a.hr_high else { return }
+        u.limitsSent = true
+        do { try u.service.setHrThresholds(low: low, high: high); AppLog.log("heart-rate limits sent: \(low)-\(high)") }
+        catch { AppLog.log("heart-rate limits error: \(error)") }
+    }
+
+    /// Start a workout when the step counter says you're walking, end it when you stop: second-by-second
+    /// heart rate and a GPS route. Watches the live counter every 2 minutes; 60+ steps a minute counts as walking.
+    private func walkTracker(_ u: Unit) {
+        guard u.record.entity == "scanwatch", case .finished = u.service.progress() else { return }
+        let now = Date()
+        let snap = try? u.service.snapshot()
+        let recording = snap?.activeWorkout != nil && u.burstStartedAt == nil
+        KeepAlive.shared.setTracking(recording)
+        guard now.timeIntervalSince(u.lastStepPoll) >= 120 else { return }
+        u.lastStepPoll = now
+        try? u.service.requestRefresh()
+        guard let count = snap?.steps?.count else { return }
+        defer { u.lastStepCount = count }
+        guard let last = u.lastStepCount, count >= last else { return }
+        let delta = count - last
+        if delta >= 120 { u.movingPolls += 1; u.stillPolls = 0 }
+        else if delta < 30 { u.stillPolls += 1; u.movingPolls = 0 }
+        if u.autoWalk {
+            guard u.stillPolls >= 2 else { return }
+            do { try u.service.stopWorkout(); AppLog.log("walk ended") } catch { AppLog.log("walk stop error: \(error)") }
+            u.autoWalk = false
+        } else if u.movingPolls >= 2, snap?.activeWorkout == nil, u.burstStartedAt == nil {
+            do { try u.service.startWorkout(activity: 1); u.autoWalk = true; AppLog.log("walk started") }
+            catch { AppLog.log("walk start error: \(error)") }
+        }
+    }
+
+    /// Read the watch's whole 8 MB flash, 16 KB at a time, into Documents/raw. Read-only; resumes if interrupted.
+    private func readFlash(_ u: Unit) {
+        guard !u.flashRunning else { return }
+        u.flashRunning = true
+        let block: UInt32 = 0x4000, size: UInt32 = 0x800000
+        let url = Settings.documents.appendingPathComponent("raw/flash-\(u.record.entity).bin")
+        DispatchQueue.global(qos: .utility).async {
+            defer { u.flashRunning = false }
+            if !FileManager.default.fileExists(atPath: url.path) { FileManager.default.createFile(atPath: url.path, contents: nil) }
+            guard let out = try? FileHandle(forWritingTo: url) else { AppLog.log("flash: can't open file"); return }
+            defer { try? out.close() }
+            let have = UInt32((try? out.seekToEnd()) ?? 0)
+            var offset = have / block * block
+            try? out.seek(toOffset: UInt64(offset))
+            AppLog.log("flash: reading from \(offset)")
+            var failures = 0
+            while offset < size {
+                self.link.queue.sync { try? u.service.spiFlashRead(addr: offset, len: block) }
+                let started = Date()
+                var got: Data?
+                while Date().timeIntervalSince(started) < 30 {
+                    guard let p = u.service.spiFlashProgress() else { break }
+                    if let e = p.error { AppLog.log("flash: watch refused at \(offset) (\(e))"); return }
+                    if p.done { got = u.service.spiFlashTake(); break }
+                    Thread.sleep(forTimeInterval: 0.04)
+                }
+                guard let data = got, data.count == Int(block) else {
+                    failures += 1
+                    if failures > 20 { AppLog.log("flash: gave up at \(offset)"); return }
+                    Thread.sleep(forTimeInterval: 5)
+                    continue
+                }
+                failures = 0
+                try? out.write(contentsOf: data)
+                offset += block
+                if offset % 0x100000 == 0 { AppLog.log("flash: \(offset / 0x100000) MB") }
+            }
+            AppLog.log("flash: done")
+        }
+    }
+
+    func screens(_ id: UUID) -> [WatchScreen] { link.queue.sync { units[id]?.service.screens() ?? [] } }
+    func loadScreens(_ id: UUID) { with(id) { try? $0.service.requestScreens() } }
+    func setScreens(_ id: UUID, _ order: [UInt8]) {
+        with(id) { u in
+            do { try u.service.setScreens(ids: Data(order)); AppLog.log("screens set: \(order)") }
+            catch { AppLog.log("screens error: \(error)") }
+        }
+    }
+
     private func declareZone(_ u: Unit) {
         let tz = TimeZone.current
         let offset = Int32(tz.secondsFromGMT())
@@ -481,6 +606,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         }
         guard let u = units[id] else { return }
         AppLog.log("\(u.record.entity) link ready")
+        applyLocalAlerts(u.service, u.record.entity)
         do { try u.service.onConnected() } catch { AppLog.log("\(u.record.entity) onConnected error: \(error)") }
         u.lastZoneOffset = nil
         declareZone(u)

@@ -97,6 +97,8 @@ struct RemoteConfig: Decodable {
         var id: String
         var watch: String
         var hex: String?
+        /// Instead of bytes: "debug_dump" or "flash_read".
+        var action: String?
         /// Feature experiment instead of raw bytes: window_minutes < 0 off, 0 permanent, > 0 from now.
         var feature: UInt16?
         var window_minutes: Int32?
@@ -107,6 +109,14 @@ struct RemoteConfig: Decodable {
     var hr_burst: HrBurst?
     /// The NUC file Wrist polls every minute (commands that should arrive fast).
     var commands_url: String?
+    /// The watch's own alerts: heart-rate limits and the move reminder.
+    var alerts: Alerts?
+
+    struct Alerts: Decodable {
+        var hr_low: UInt8?
+        var hr_high: UInt8?
+        var move_reminder: Bool?
+    }
     /// One-off alerts to show on the watches, each id once.
     var notify: [Notify]?
 
@@ -146,6 +156,7 @@ struct RemoteConfig: Decodable {
         base.notify = (base.notify ?? []) + (remote.notify ?? [])
         if let k = remote.keep_features { base.keep_features = k }
         if let h = remote.hr_burst { base.hr_burst = h }
+        if let a = remote.alerts { base.alerts = a }
         return base
     }
 
@@ -155,5 +166,6 @@ struct RemoteConfig: Decodable {
         var notify: [Notify]?
         var keep_features: [UInt16]?
         var hr_burst: HrBurst?
+        var alerts: Alerts?
     }
 }

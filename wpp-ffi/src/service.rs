@@ -129,9 +129,22 @@ impl WatchService {
         self.dispatch(actions)
     }
 
-    /// ScanWatch: keep the watch's day and night AFib checks on (re-sent on every connection).
-    pub fn set_afib_checks(&self, on: bool) {
-        self.inner.lock().unwrap().client.set_afib_checks(on);
+    /// Which of the watch's own alerts to switch on; sent on every connection.
+    pub fn set_local_alerts(&self, afib_day: bool, afib_night: bool, inactivity: bool, hr_high: bool, hr_low: bool) {
+        self.inner.lock().unwrap().client.set_local_alerts(wpp::client::LocalAlerts {
+            afib_day, afib_night, inactivity, hr_high, hr_low,
+        });
+    }
+
+    pub fn set_hr_thresholds(&self, low: u8, high: u8) -> Result<(), WatchError> {
+        let actions = self.inner.lock().unwrap().client.set_hr_thresholds(low, high, now());
+        self.dispatch(actions)
+    }
+
+    /// Ask the watch for its debug dump now.
+    pub fn start_debug_dump(&self) -> Result<(), WatchError> {
+        let actions = self.inner.lock().unwrap().client.start_debug_dump(now());
+        self.dispatch(actions)
     }
 
     /// Breathing scan every night (the official app's "always": feature 9 with no window),
