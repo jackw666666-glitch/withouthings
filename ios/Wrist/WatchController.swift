@@ -117,7 +117,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
     private func pairingProgressed() {
         guard let pairer, let id = pairingId else { return }
         let p = pairer.progress()
-        AppLog.log("pairing: \(p)")
+        if case .paired(let mac, _) = p { AppLog.log("pairing: paired \(mac)") } else { AppLog.log("pairing: \(p)") }   // never log the secret
         switch p {
         case .paired(let mac, let secret):
             let entity = WatchRecord.entity(for: pairingName)
