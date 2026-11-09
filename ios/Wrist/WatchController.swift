@@ -41,6 +41,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         var lastSync: Date?
         var lastBattery = Date.distantPast
         var lastProfileCheck = Date.distantPast
+        var scanModeSet = false
         var lastHrMs: Int64 = 0
         init(record: WatchRecord, service: WatchService, raw: RawLog) {
             self.record = record; self.service = service; self.raw = raw
@@ -203,6 +204,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
                                            transport: ServiceTransport(self, record.id), ancs: HostedAncs(host),
                                            rasterizer: WatchRasterizer())
             service.preferNotifications(enabled: true)      // a reset leaves them off
+            if record.entity == "scanwatch" { service.setAfibChecks(on: true) }   // day + night AFib checks
             units[record.id] = Unit(record: record, service: service, raw: RawLog(prefix: record.entity, db: record.dbURL))
             link.connect(record.id)
             AppLog.log("started \(record.name) (\(record.entity))")
@@ -231,7 +233,10 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
             do { try s.tick() } catch { AppLog.log("\(u.record.entity) tick error: \(error)") }
             for line in s.unhandledObjects() { AppLog.log("\(u.record.entity) unhandled: \(line)") }
             declareZone(u)
-            if Settings.allDayScan, u.record.entity == "scanwatch", s.respiratoryScan() == nil { try? s.armRespiratoryScan() }
+            if u.record.entity == "scanwatch", !u.scanModeSet {
+                // Breathing scan every night (official "always"), or the watch's own automatic nights.
+                if (try? s.setRespiratoryScanAlways(on: Settings.allDayScan)) != nil { u.scanModeSet = true }
+            }
         }
         if now.timeIntervalSince(u.lastResync) >= 60 {
             u.lastResync = now
@@ -344,7 +349,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         Settings.allDayScan = on
         link.queue.async {
             for u in self.units.values where u.record.entity == "scanwatch" {
-                if on { try? u.service.armRespiratoryScan() } else { try? u.service.cancelRespiratoryScan() }
+                try? u.service.setRespiratoryScanAlways(on: on)
             }
         }
     }

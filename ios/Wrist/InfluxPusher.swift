@@ -106,6 +106,25 @@ final class InfluxPusher {
             }
         }
 
+        // Health readings the watch takes on its own (real UTC times; new series, nothing reads the old cloud ones).
+        for w in watches {
+            let e = w.entity
+            for (metric, name) in [(Metric.spo2, "watch_spo2"), (.hrvRmssd, "watch_hrv_rmssd"), (.respiratoryRate, "watch_resp_rate")] {
+                for p in ((try? w.service.series(metric: metric, fromMs: fromMs, toMs: nowMs, maxPoints: 100_000)) ?? []) {
+                    lines.append("\(name),domain=sensor,entity_id=\(e) value=\(p.value) \(p.atMs / 1000)")
+                }
+            }
+            for a in ((try? w.service.afibEpisodes()) ?? []) where a.measuredAtMs >= fromMs {
+                let rhythm = a.rhythm.map { "\($0)" } ?? "unknown"
+                let isAfib = a.rhythm == .afib ? 1 : 0
+                lines.append("watch_afib,domain=sensor,entity_id=\(e),rhythm=\(rhythm) value=\(isAfib)i,alerted=\(a.alerted == true) \(a.measuredAtMs / 1000)")
+            }
+            for g in ((try? w.service.ecgs()) ?? []) where g.measuredAtMs >= fromMs {
+                let rhythm = g.rhythm.map { "\($0)" } ?? "none"
+                lines.append("watch_ecg,domain=sensor,entity_id=\(e),rhythm=\(rhythm) heart_rate=\(g.heartRate ?? 0)i,seconds=\(g.seconds) \(g.measuredAtMs / 1000)")
+            }
+        }
+
         // Battery per watch: the old 3-level band (HA sensors read it) + the real percentage in a new series.
         for w in watches {
             guard let b = (try? w.service.snapshot())?.battery else { continue }

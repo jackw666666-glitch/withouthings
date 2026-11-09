@@ -129,6 +129,24 @@ impl WatchService {
         self.dispatch(actions)
     }
 
+    /// ScanWatch: keep the watch's day and night AFib checks on (re-sent on every connection).
+    pub fn set_afib_checks(&self, on: bool) {
+        self.inner.lock().unwrap().client.set_afib_checks(on);
+    }
+
+    /// Breathing scan every night (the official app's "always": feature 9 with no window),
+    /// instead of one 24-hour window at a time.
+    pub fn set_respiratory_scan_always(&self, on: bool) -> Result<(), WatchError> {
+        let mut features = self.enabled_features();
+        features.retain(|f| f.id != RESPIRATORY_SCAN_MONITORING && f.id != FeatureId(11));
+        if on {
+            features.push(Feature { id: RESPIRATORY_SCAN_MONITORING, schedule: FeatureSchedule::Permanent });
+        } else {
+            features.push(Feature { id: FeatureId(11), schedule: FeatureSchedule::Permanent });
+        }
+        self.commit_features(features)
+    }
+
     pub fn hands_calibration_start(&self) -> Result<(), WatchError> {
         let actions = self.inner.lock().unwrap().client.hands_calibration_start(now());
         self.dispatch(actions)
