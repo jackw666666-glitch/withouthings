@@ -179,6 +179,12 @@ impl WatchService {
         self.commit_features(features)
     }
 
+    /// When the newest oxygen spot check was taken (ms), if there is one.
+    pub fn latest_spo2_check_ms(&self) -> Result<Option<i64>, WatchError> {
+        let at = self.store.lock().unwrap().latest_spo2_check(self.device_id)?;
+        Ok(at.map(|t| if t < 100_000_000_000 { t * 1000 } else { t }))
+    }
+
     pub fn hands_calibration_start(&self) -> Result<(), WatchError> {
         let actions = self.inner.lock().unwrap().client.hands_calibration_start(now());
         self.dispatch(actions)

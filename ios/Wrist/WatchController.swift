@@ -239,6 +239,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
             if !u.scanModeSet, (try? s.dropSleepFeatures(keep: RemoteConfig.load()?.keep_features ?? [])) != nil { u.scanModeSet = true }   // never worn in bed
             runExperiments(u)
             heartRateBurst(u)
+            promptForTests(u)
         }
         if now.timeIntervalSince(u.lastResync) >= 60 {
             u.lastResync = now
@@ -355,6 +356,47 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         d.set(Array(done.suffix(1000)), forKey: "alertsDone")
     }
 
+    /// On a day the ScanWatch is worn: one ECG and one oxygen reading, one retry each, 3 prompts at most.
+    /// Only when it is on the wrist and you have been still, 9 am to 10 pm. The crown is set to the test first.
+    private func promptForTests(_ u: Unit) {
+        guard u.record.entity == "scanwatch", u.burstStartedAt == nil, case .finished = u.service.progress(),
+              self.host.isListening(u.record.id) else { return }
+        let now = Date(), cal = Calendar.current
+        let hour = cal.component(.hour, from: now)
+        guard hour >= 9, hour < 22 else { return }
+        let nowMs = Int64(now.timeIntervalSince1970 * 1000)
+        let dayStart = Int64(cal.startOfDay(for: now).timeIntervalSince1970 * 1000)
+        guard let snap = try? u.service.snapshot(), snap.activeWorkout == nil, !snap.measuring,
+              let hr = snap.latestHr, nowMs - hr.atMs < 30 * 60_000 else { return }          // on the wrist
+        let recent = (try? u.service.activityWindows(fromMs: nowMs - 15 * 60_000, toMs: nowMs)) ?? []
+        guard recent.reduce(0, { $0 + $1.steps }) < 20 else { return }                       // sitting still
+
+        let d = UserDefaults.standard
+        let day = ISO8601DateFormatter.string(from: now, timeZone: .current, formatOptions: [.withFullDate])
+        let total = d.integer(forKey: "prompt-\(day)-total")
+        guard total < 3, now.timeIntervalSince1970 - d.double(forKey: "prompt-\(day)-last") >= 3600 else { return }
+
+        let ecgDone = ((try? u.service.ecgs()) ?? []).contains { $0.measuredAtMs >= dayStart }
+        let oxygenDone = ((try? u.service.latestSpo2CheckMs()) ?? nil).map { $0 >= dayStart } ?? false
+        let tests: [(name: String, label: String, shortcut: String, done: Bool)] = [
+            ("ecg", "ECG", "010989000509a1000101", ecgDone),
+            ("oxygen", "Oxygen", "010989000509a1000102", oxygenDone),
+        ]
+        for t in tests where !t.done {
+            let tries = d.integer(forKey: "prompt-\(day)-\(t.name)")
+            let last = d.double(forKey: "prompt-\(day)-\(t.name)-last")
+            guard tries < 2, now.timeIntervalSince1970 - last >= 4 * 3600, let frame = Data(hexString: t.shortcut) else { continue }
+            send(u.record.id, [frame])
+            notify(title: "Wrist", message: "Hold crown: \(t.label)", only: u.record.id)
+            d.set(tries + 1, forKey: "prompt-\(day)-\(t.name)")
+            d.set(now.timeIntervalSince1970, forKey: "prompt-\(day)-\(t.name)-last")
+            d.set(total + 1, forKey: "prompt-\(day)-total")
+            d.set(now.timeIntervalSince1970, forKey: "prompt-\(day)-last")
+            AppLog.log("prompt: \(t.label), try \(tries + 1) today")
+            return
+        }
+    }
+
     private func declareZone(_ u: Unit) {
         let tz = TimeZone.current
         let offset = Int32(tz.secondsFromGMT())
@@ -394,11 +436,13 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
     }
 
     /// An alert to every watch listening, through Wrist's own Bluetooth alert service.
-    func notify(title: String, message: String) {
+    func notify(title: String, message: String, only watch: UUID? = nil) {
         link.queue.async {
             _ = self.host
             guard let u = self.ancsUnit else { return }
+            self.host.announceTo = watch
             let id = u.service.postNotification(appId: "com.jdubz.wrist", title: title, subtitle: "", message: message, category: .other)
+            self.host.announceTo = nil
             AppLog.log("alert \(id) posted; \(self.host.listeners) watch(es) listening")
         }
     }

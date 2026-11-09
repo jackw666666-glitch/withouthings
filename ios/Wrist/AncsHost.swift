@@ -30,7 +30,10 @@ final class AncsHost: NSObject, CBPeripheralManagerDelegate {
         manager = CBPeripheralManager(delegate: self, queue: queue, options: [CBPeripheralManagerOptionRestoreIdentifierKey: "wrist.ancs"])
     }
 
-    func announce(_ bytes: Data) { send(source, bytes, nil) }
+    /// Set around a post to reach one watch only; nil, or a watch not listening, reaches every watch listening.
+    var announceTo: UUID?
+    func isListening(_ id: UUID) -> Bool { subscribers[id] != nil }
+    func announce(_ bytes: Data) { send(source, bytes, announceTo.flatMap { subscribers[$0] }.map { [$0] }) }
     func attributes(_ bytes: Data) { send(data, bytes, requester.map { [$0] }) }
 
     private func send(_ c: CBMutableCharacteristic, _ bytes: Data, _ to: [CBCentral]?) {

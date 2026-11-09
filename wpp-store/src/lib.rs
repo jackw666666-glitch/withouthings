@@ -1391,6 +1391,15 @@ impl Store {
         })
     }
 
+    /// When the newest SpO2 spot check was taken, in the units `measured_at` is stored in.
+    pub fn latest_spo2_check(&self, device_id: DeviceId) -> Result<Option<i64>, Error> {
+        Ok(self.conn.query_row(
+            "SELECT MAX(measured_at) FROM spo2_check WHERE device_id = ?1",
+            params![device_id],
+            |r| r.get(0),
+        )?)
+    }
+
     pub fn ecg_measures(&self, ecg_id: EcgId) -> Result<Vec<EcgMeasure>, Error> {
         let mut stmt = self
             .conn
