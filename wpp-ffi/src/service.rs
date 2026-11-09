@@ -631,6 +631,10 @@ impl WatchService {
             .unwrap()
             .client
             .set_user(&wpp::objects::TrackerUser {
+                // A reset leaves id 0 and no name; the watch acknowledges such a profile but keeps
+                // nothing. Gadgetbridge always sends a non-zero id and a name.
+                id: if held.id == 0 { 123456 } else { held.id },
+                first_name: if held.first_name.is_empty() { "Jack".to_string() } else { held.first_name.clone() },
                 birth: birth_secs as i32,
                 weight: weight_grams,
                 height: height_cm,
