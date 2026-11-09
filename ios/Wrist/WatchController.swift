@@ -154,6 +154,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
             let service = try WatchService(dbPath: record.dbURL.path, mac: record.mac, secret: record.secret,
                                            transport: ServiceTransport(self, record.id), ancs: NoAncs(),
                                            rasterizer: WatchRasterizer())
+            service.setHoldSyncOk(hold: true)
             units[record.id] = Unit(record: record, service: service, raw: RawLog(prefix: record.entity, db: record.dbURL))
             link.connect(record.id)
             AppLog.log("started \(record.name) (\(record.entity))")
@@ -212,6 +213,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         u.lastProfileCheck = now
         guard let held = (try? u.service.snapshot())?.user else {
             try? u.service.requestDeviceConfig()     // the watch reports its profile with its config
+            u.lastProfileCheck = now.addingTimeInterval(-570)   // look again in 30 s, not 10 min
             return
         }
         let birth = want.birth_secs ?? held.birthSecs

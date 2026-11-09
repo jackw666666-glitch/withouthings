@@ -123,6 +123,11 @@ impl WatchService {
         self.dispatch(actions)
     }
 
+    /// Keep the watch sending its once-a-minute sync request, so a suspended iOS app keeps being woken.
+    pub fn set_hold_sync_ok(&self, hold: bool) {
+        self.inner.lock().unwrap().client.set_hold_sync_ok(hold);
+    }
+
     /// Ask the watch for a heart-rate reading now (used when the watch is put on).
     pub fn request_live_hr(&self) -> Result<(), WatchError> {
         let actions = self.inner.lock().unwrap().client.request_live_hr(now());

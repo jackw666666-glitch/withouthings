@@ -16,7 +16,7 @@ final class InfluxPusher {
             return
         }
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
-        let fromMs = max(Settings.influxWatermarkMs, nowMs - 3 * 86_400_000)
+        let fromMs = max(Settings.influxWatermarkMs, nowMs - 14 * 86_400_000)
         var lines: [String] = []
 
         // Per-minute activity (increments per minute), summed across watches.
