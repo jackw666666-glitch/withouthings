@@ -19,22 +19,22 @@ final class InfluxPusher {
         let fromMs = max(Settings.influxWatermarkMs, nowMs - 14 * 86_400_000)
         var lines: [String] = []
 
-        // Per-minute activity (increments per minute), summed across watches.
-        let metrics: [(Metric, String, String)] = [
-            (.steps, "time_steps", "withings_time_steps"),
-            (.distance, "time_distance", "withings_time_distance"),
-            (.ascent, "time_elevation", "withings_time_elevation"),
-            (.calories, "time_calories", "withings_time_caloires"),
-        ]
-        for (metric, measurement, id) in metrics {
-            var minutes: [Int64: Double] = [:]
-            for w in watches {
-                let points = (try? w.service.series(metric: metric, fromMs: fromMs, toMs: nowMs, maxPoints: 100_000)) ?? []
-                for p in points { minutes[Self.localStamp(p.atMs) / 60 * 60, default: 0] += p.value }
+        // Per-minute activity, from the watch's activity minutes, summed across watches.
+        // Not series(.steps): that is the watch's running daily counter.
+        var perMinute: [Int64: (steps: Int64, metres: Double, ascent: Double, kcal: Double)] = [:]
+        for w in watches {
+            for m in ((try? w.service.activityWindows(fromMs: fromMs, toMs: nowMs)) ?? []) where m.durationSecs <= 60 {
+                let t = Self.localStamp(m.atMs) / 60 * 60
+                var row = perMinute[t] ?? (0, 0, 0, 0)
+                row.steps += m.steps; row.metres += m.distanceMetres; row.ascent += m.ascentMetres; row.kcal += m.calories
+                perMinute[t] = row
             }
-            for (t, v) in minutes where v > 0 || metric == .steps {
-                lines.append("\(measurement),domain=sensor,entity_id=\(id) value=\(Int(v))i \(t)")
-            }
+        }
+        for (t, r) in perMinute {
+            if r.steps > 0 { lines.append("time_steps,domain=sensor,entity_id=withings_time_steps value=\(r.steps)i \(t)") }
+            if r.metres > 0 { lines.append("time_distance,domain=sensor,entity_id=withings_time_distance value=\(Int(r.metres))i \(t)") }
+            if r.ascent > 0 { lines.append("time_elevation,domain=sensor,entity_id=withings_time_elevation value=\(Int(r.ascent))i \(t)") }
+            if r.kcal > 0 { lines.append("time_calories,domain=sensor,entity_id=withings_time_caloires value=\(Int(r.kcal))i \(t)") }
         }
 
         // Heart rate per reading.

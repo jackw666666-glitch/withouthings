@@ -156,6 +156,17 @@ pub struct WorkoutSummary {
     pub calories: Option<f64>,
 }
 
+/// One activity window as the watch reported it (usually a minute).
+#[derive(uniffi::Record, Debug, Clone, PartialEq)]
+pub struct ActivityWindow {
+    pub at_ms: i64,
+    pub duration_secs: i64,
+    pub steps: i64,
+    pub distance_metres: f64,
+    pub ascent_metres: f64,
+    pub calories: f64,
+}
+
 #[derive(uniffi::Record, Debug, Clone, PartialEq)]
 pub struct ActivityTotals {
     pub steps: i64,

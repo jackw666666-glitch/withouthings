@@ -128,6 +128,28 @@ impl WatchService {
         self.inner.lock().unwrap().client.set_hold_sync_ok(hold);
     }
 
+    /// The per-minute activity the watch reported. (`series(Metric::Steps)` is the running daily
+    /// counter, not this.)
+    pub fn activity_windows(&self, from_ms: i64, to_ms: i64) -> Result<Vec<ActivityWindow>, WatchError> {
+        let store = self.store.lock().unwrap();
+        let minutes = store.activity_minutes(
+            self.device_id,
+            UnixMillis(from_ms).to_seconds(),
+            UnixMillis(to_ms).to_seconds(),
+        )?;
+        Ok(minutes
+            .into_iter()
+            .map(|m| ActivityWindow {
+                at_ms: m.at.to_millis().0,
+                duration_secs: m.duration.as_millis() / 1000,
+                steps: m.steps.unwrap_or(0),
+                distance_metres: m.distance.map_or(0.0, |d| d.raw() as f64 / 100.0),
+                ascent_metres: m.ascent.map_or(0.0, |d| d.raw() as f64 / 100.0),
+                calories: m.calories.map_or(0.0, |d| d.raw() as f64 / 100.0),
+            })
+            .collect())
+    }
+
     /// Ask the watch for a heart-rate reading now (used when the watch is put on).
     pub fn request_live_hr(&self) -> Result<(), WatchError> {
         let actions = self.inner.lock().unwrap().client.request_live_hr(now());
