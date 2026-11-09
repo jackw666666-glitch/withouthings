@@ -216,6 +216,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
     }
 
     private func housekeepingAll() {
+        sendQueuedAlerts()
         for unit in units.values { housekeeping(unit) }
         let now = Date()
         if now.timeIntervalSince(lastPush) >= 300, !units.isEmpty {
@@ -340,6 +341,18 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
             UserDefaults.standard.set(Array(bursts.suffix(500)), forKey: "burstStarts")
             AppLog.log("\(u.record.entity) heart-rate burst started (\(cfg.length_minutes) min)")
         } catch { AppLog.log("\(u.record.entity) burst start error: \(error)") }
+    }
+
+    /// Alerts the NUC queued (notify in config/remote), each id once.
+    private func sendQueuedAlerts() {
+        guard let list = RemoteConfig.load()?.notify, !list.isEmpty else { return }
+        let d = UserDefaults.standard
+        var done = Set(d.stringArray(forKey: "alertsDone") ?? [])
+        for n in list where !done.contains(n.id) {
+            notify(title: n.title, message: n.message)
+            done.insert(n.id)
+        }
+        d.set(Array(done.suffix(1000)), forKey: "alertsDone")
     }
 
     private func declareZone(_ u: Unit) {

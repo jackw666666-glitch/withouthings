@@ -105,6 +105,16 @@ struct RemoteConfig: Decodable {
     var keep_features: [UInt16]?
     /// Short workouts while worn, for a burst of second-by-second heart rate.
     var hr_burst: HrBurst?
+    /// The NUC file Wrist polls every minute (commands that should arrive fast).
+    var commands_url: String?
+    /// One-off alerts to show on the watches, each id once.
+    var notify: [Notify]?
+
+    struct Notify: Decodable {
+        var id: String
+        var title: String
+        var message: String
+    }
 
     struct HrBurst: Decodable {
         var watch: String
@@ -119,9 +129,31 @@ struct RemoteConfig: Decodable {
         var name: String?
     }
 
-    static func load() -> RemoteConfig? {
+    /// config.json alone (pushed by the NUC over the cable/Wi-Fi file service).
+    static func loadBase() -> RemoteConfig? {
         let url = Settings.documents.appendingPathComponent("config.json")
         guard let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(RemoteConfig.self, from: data)
+    }
+
+    /// config.json with the polled remote.json on top: its experiments and alerts are added,
+    /// its keep_features / hr_burst win.
+    static func load() -> RemoteConfig? {
+        guard var base = loadBase() else { return nil }
+        let url = Settings.documents.appendingPathComponent("remote.json")
+        guard let data = try? Data(contentsOf: url), let remote = try? JSONDecoder().decode(Remote.self, from: data) else { return base }
+        base.experiments = (base.experiments ?? []) + (remote.experiments ?? [])
+        base.notify = (base.notify ?? []) + (remote.notify ?? [])
+        if let k = remote.keep_features { base.keep_features = k }
+        if let h = remote.hr_burst { base.hr_burst = h }
+        return base
+    }
+
+    /// What the polled file may carry.
+    struct Remote: Decodable {
+        var experiments: [Experiment]?
+        var notify: [Notify]?
+        var keep_features: [UInt16]?
+        var hr_burst: HrBurst?
     }
 }

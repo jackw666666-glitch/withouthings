@@ -278,6 +278,11 @@ impl Signal {
     }
 
     pub fn is_complete(&self) -> bool {
+        // A delta-coded signal (format 3, the ScanWatch 1's ECG) arrives smaller than the raw size
+        // it declares; it is whole once the reply that carries it has ended.
+        if SampleFormat::from_meta(self.meta.format) == Some(SampleFormat::Delta) {
+            return !self.data.is_empty();
+        }
         self.data.len() == self.declared_size()
     }
 
@@ -464,6 +469,15 @@ impl SignalCollector {
                 }
             }
             WppObject::MeasureLiveEcg(chunk) => self.live_ecg.extend_from_slice(&chunk.samples),
+            // The end of a reply also ends a delta-coded signal, which never reaches its declared size.
+            WppObject::Null(_) => {
+                let delta = self.receiving.as_ref().is_some_and(|open| {
+                    SampleFormat::from_meta(open.meta.format) == Some(SampleFormat::Delta)
+                });
+                if delta {
+                    self.close();
+                }
+            }
             _ => {}
         }
     }

@@ -1364,10 +1364,9 @@ impl Store {
         let rows = stmt.query_map(params![device_id], |r| {
             let id: EcgId = r.get(0)?;
             let unreadable = |fault| Ok(Err(UnreadableEcg { id, fault }));
-            let format: u8 = r.get(5)?;
-            if format == SampleFormat::DELTA_META {
-                return unreadable(EcgFault::DeltaCoded);
-            }
+            // A delta-coded recording (the ScanWatch 1's) is still listed: its watch verdict, heart
+            // rate and intervals don't need the waveform. Only drawing it does.
+            let _format: u8 = r.get(5)?;
             let signal_type: u16 = r.get(2)?;
             let Some(kind) = SignalKind::from_type_id(signal_type) else {
                 return unreadable(EcgFault::NotAnEcgSignal(signal_type));
@@ -2637,9 +2636,8 @@ mod tests {
 
         assert_eq!(store.count("ecg").unwrap(), 1);
         let listed = store.ecgs(device).unwrap();
-        assert!(listed.rows.is_empty());
-        assert_eq!(listed.unreadable.len(), 1);
-        assert_eq!(listed.unreadable[0].fault, EcgFault::DeltaCoded);
+        assert_eq!(listed.rows.len(), 1, "listed for its verdict even though the waveform can't be drawn");
+        assert!(listed.unreadable.is_empty());
     }
 
     #[test]

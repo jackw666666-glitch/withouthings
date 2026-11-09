@@ -5,7 +5,11 @@ struct WristApp: App {
     @StateObject private var watch = WatchController.shared
     @Environment(\.scenePhase) private var phase
 
-    init() { WatchController.shared.registerBackgroundRefresh() }
+    init() {
+        WatchController.shared.registerBackgroundRefresh()
+        KeepAlive.shared.start()
+        CommandPoller.shared.start()
+    }
 
     var body: some Scene {
         WindowGroup {

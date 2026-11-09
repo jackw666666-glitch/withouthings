@@ -16,9 +16,11 @@
   <key>UIApplicationSceneManifest</key><dict><key>UIApplicationSupportsMultipleScenes</key><false/></dict>
   <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string></array>
   <key>UIUserInterfaceStyle</key><string>Dark</string>
-  <key>UIBackgroundModes</key><array><string>bluetooth-central</string><string>bluetooth-peripheral</string><string>fetch</string></array>
+  <key>UIBackgroundModes</key><array><string>bluetooth-central</string><string>bluetooth-peripheral</string><string>fetch</string><string>location</string></array>
   <key>BGTaskSchedulerPermittedIdentifiers</key><array><string>com.jdubz.wrist.refresh</string></array>
   <key>NSBluetoothAlwaysUsageDescription</key><string>Wrist talks to your watch over Bluetooth.</string>
+  <key>NSLocationAlwaysAndWhenInUseUsageDescription</key><string>Keeps Wrist running so your watches stay synced. Your location isn't stored or used.</string>
+  <key>NSLocationWhenInUseUsageDescription</key><string>Keeps Wrist running so your watches stay synced. Your location isn't stored or used.</string>
   <key>NSLocalNetworkUsageDescription</key><string>Wrist sends your watch data to InfluxDB on your home network.</string>
   <key>NSAppTransportSecurity</key><dict><key>NSAllowsArbitraryLoads</key><true/></dict>
   <key>UIFileSharingEnabled</key><true/>
