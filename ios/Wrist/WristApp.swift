@@ -3,11 +3,18 @@ import SwiftUI
 @main
 struct WristApp: App {
     @StateObject private var watch = WatchController.shared
+    @Environment(\.scenePhase) private var phase
+
+    init() { WatchController.shared.registerBackgroundRefresh() }
+
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(watch)
                 .preferredColorScheme(.dark)
+        }
+        .onChange(of: phase) { _, now in
+            if now == .background { watch.scheduleBackgroundRefresh() }
         }
     }
 }

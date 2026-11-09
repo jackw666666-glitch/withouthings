@@ -1,3 +1,4 @@
+import BackgroundTasks
 import Foundation
 import SwiftUI
 
@@ -66,6 +67,41 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         timer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
             self?.link.queue.async { self?.housekeepingAll() }
         }
+    }
+
+    // MARK: scheduled background refresh
+
+    /// Watches only speak up now and then, so also ask iOS to wake the app. iOS decides when; 15 min is the earliest.
+    private static let refreshId = "com.jdubz.wrist.refresh"
+
+    /// Must run before the app finishes launching.
+    func registerBackgroundRefresh() {
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: Self.refreshId, using: nil) { [weak self] task in
+            self?.backgroundRefresh(task)
+        }
+        scheduleBackgroundRefresh()
+    }
+
+    func scheduleBackgroundRefresh() {
+        let request = BGAppRefreshTaskRequest(identifier: Self.refreshId)
+        request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
+        do { try BGTaskScheduler.shared.submit(request) } catch { AppLog.log("refresh schedule error: \(error)") }
+    }
+
+    private func backgroundRefresh(_ task: BGTask) {
+        AppLog.log("background refresh")
+        scheduleBackgroundRefresh()
+        let finish = DispatchWorkItem { task.setTaskCompleted(success: true) }
+        task.expirationHandler = { finish.cancel(); task.setTaskCompleted(success: false) }
+        link.queue.async {
+            for u in self.units.values {
+                self.link.connect(u.record.id)
+                do { try u.service.syncNow() } catch { AppLog.log("\(u.record.entity) refresh sync error: \(error)") }
+            }
+        }
+        // Give the watches time to answer, then push what arrived.
+        link.queue.asyncAfter(deadline: .now() + 12) { self.housekeepingAll() }
+        link.queue.asyncAfter(deadline: .now() + 24, execute: finish)
     }
 
     // MARK: pairing
