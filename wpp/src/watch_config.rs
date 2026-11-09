@@ -50,7 +50,8 @@ pub const SCAN_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
 /// off. This is what the reference app sends, minus 9, which is armed a window
 /// at a time instead — see [`RESPIRATORY_SCAN_MONITORING`]. 88 and 113 have no
 /// constant in the APK but the reference app sends them, so they are carried.
-pub const DEFAULT_FEATURES: &[u16] = &[3, 5, 10, 11, 14, 17, 19, 20, 27, 53, 71, 88, 113];
+// 4 = ECG terms accepted, 15 = SpO2 measurement enabled: without them a ScanWatch 1 refuses ECG and SpO2.
+pub const DEFAULT_FEATURES: &[u16] = &[3, 4, 5, 10, 11, 14, 15, 17, 19, 20, 27, 53, 71, 88, 113];
 
 pub fn default_features() -> Vec<Feature> {
     DEFAULT_FEATURES

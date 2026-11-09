@@ -299,9 +299,6 @@ impl Signal {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecordingError {
-    /// Nothing here decodes these, and read as plain samples they are a wrong
-    /// waveform.
-    DeltaCoded,
     UnknownFormat(u8),
     NoSamplingRate,
     NoLeads,
@@ -310,7 +307,6 @@ pub enum RecordingError {
 impl std::fmt::Display for RecordingError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RecordingError::DeltaCoded => write!(f, "delta-coded samples"),
             RecordingError::UnknownFormat(code) => write!(f, "unknown sample format {code}"),
             RecordingError::NoSamplingRate => write!(f, "a sampling rate of zero"),
             RecordingError::NoLeads => write!(f, "no leads"),
@@ -335,6 +331,28 @@ pub struct Recording {
     leads: Vec<RecordedLead>,
 }
 
+/// The ScanWatch 1's ECG coding: 0x80 and two big-endian bytes set the sample outright, any other byte
+/// is a signed step from the one before. Checked on a real 30 s recording: 9,000 samples at 300 Hz.
+fn decode_delta(bytes: &[u8]) -> Vec<i16> {
+    let mut samples = Vec::with_capacity(bytes.len());
+    let mut current: i16 = 0;
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == 0x80 {
+            let (Some(high), Some(low)) = (bytes.get(at + 1), bytes.get(at + 2)) else {
+                break;
+            };
+            current = i16::from_be_bytes([*high, *low]);
+            at += 3;
+        } else {
+            current = current.wrapping_add(bytes[at] as i8 as i16);
+            at += 1;
+        }
+        samples.push(current);
+    }
+    samples
+}
+
 impl Recording {
     pub fn decode(
         type_id: u16,
@@ -343,11 +361,7 @@ impl Recording {
         lead_count: usize,
         bytes: &[u8],
     ) -> Result<Recording, RecordingError> {
-        match SampleFormat::from_meta(format) {
-            None => return Err(RecordingError::UnknownFormat(format)),
-            Some(SampleFormat::Delta) => return Err(RecordingError::DeltaCoded),
-            Some(SampleFormat::Raw) => {}
-        }
+        let format = SampleFormat::from_meta(format).ok_or(RecordingError::UnknownFormat(format))?;
         let rate = SamplingHz::new(sampling_hz).ok_or(RecordingError::NoSamplingRate)?;
         let count = LeadCount::new(lead_count).ok_or(RecordingError::NoLeads)?.get();
         let kind = SignalKind::from_type_id(type_id);
@@ -358,10 +372,15 @@ impl Recording {
                 samples: Vec::with_capacity(bytes.len() / 2 / count),
             })
             .collect();
-        for (index, pair) in bytes.chunks_exact(2).enumerate() {
-            leads[index % count]
-                .samples
-                .push(i16::from_le_bytes([pair[0], pair[1]]));
+        let samples: Vec<i16> = match format {
+            SampleFormat::Raw => bytes
+                .chunks_exact(2)
+                .map(|pair| i16::from_le_bytes([pair[0], pair[1]]))
+                .collect(),
+            SampleFormat::Delta => decode_delta(bytes),
+        };
+        for (index, sample) in samples.into_iter().enumerate() {
+            leads[index % count].samples.push(sample);
         }
         Ok(Recording { kind, rate, leads })
     }
@@ -671,22 +690,12 @@ mod tests {
     }
 
     #[test]
-    fn delta_encoded_signals_are_not_decoded_as_plain_samples() {
-        let mut m = meta(7, 1);
-        m.format = 3;
-        let signal = Signal {
-            meta: m,
-            extend: StoredSignalMetaExtend {
-                duration: 0,
-                total_size: 4,
-                filter_bank: 0,
-            },
-            units: None,
-            measure: None,
-            measures: Vec::new(),
-            data: vec![1, 2, 3, 4],
-        };
-        assert_eq!(signal.recording(), Err(RecordingError::DeltaCoded));
+    fn delta_coded_samples_decode_as_the_scanwatch_1_sends_them() {
+        // The first bytes of a real ScanWatch 1 ECG.
+        let bytes = [0x80, 0x07, 0xa0, 0xaf, 0x80, 0x06, 0xc0, 0x9b, 0xea, 0x3e, 0x4a];
+        assert_eq!(decode_delta(&bytes), vec![1952, 1871, 1728, 1627, 1605, 1667, 1741]);
+        let recording = Recording::decode(1, SampleFormat::DELTA_META, 300, 1, &bytes).unwrap();
+        assert_eq!(recording.leads()[0].samples.len(), 7);
     }
 
     #[test]

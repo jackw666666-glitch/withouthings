@@ -53,17 +53,29 @@ final class InfluxPusher {
             let stamp = Self.dayStamp(day)
             var steps: Int64 = 0, metres = 0.0, ascent = 0.0, kcal = 0.0
             var effort: [Int64] = [0, 0, 0]
-            var dayHr: [Int] = []
+            var dayHr: [(Int64, Int)] = []
+            var tracked: Int64 = 0
             for w in watches {
                 if let t = try? w.service.activityTotals(fromMs: s, toMs: e) {
                     steps += t.steps; metres += t.distanceMetres; ascent += t.ascentMetres; kcal += t.calories
                 }
-                // Soft / moderate / intense from the watch's per-minute MET (light 1.5-3, moderate 3-6, vigorous 6+).
-                if let i = try? w.service.intensitySeconds(fromMs: s, toMs: e, softMet: 1.5, moderateMet: 3, intenseMet: 6) {
-                    for k in 0..<3 { effort[k] += i[k] }
+                // Rules fitted to five years of the cloud's own numbers (28% off on active minutes, checked on 2022):
+                // intense = non-walk workouts; moderate = other minutes of 76+ steps; soft = the rest of the tracked minutes.
+                let bursts = UserDefaults.standard.array(forKey: "burstStarts") as? [Double] ?? []
+                let hard = ((try? w.service.workoutsBetween(fromMs: s, toMs: e)) ?? []).compactMap { wk -> (Int64, Int64)? in
+                    guard let end = wk.endedAtMs, !wk.activity.lowercased().contains("walk"),
+                          !bursts.contains(where: { abs($0 * 1000 - Double(wk.startedAtMs)) < 120_000 }) else { return nil }
+                    return (wk.startedAtMs, end)
                 }
-                dayHr += ((try? w.service.hrSeries(fromMs: s, toMs: e, maxPoints: 100_000)) ?? []).map { Int($0.bpm) }.filter { $0 > 0 }
+                effort[2] += hard.reduce(0) { $0 + ($1.1 - $1.0) / 1000 }
+                for m in ((try? w.service.activityWindows(fromMs: s, toMs: e)) ?? []) where m.durationSecs <= 60 {
+                    tracked += m.durationSecs
+                    if m.steps >= 76, !hard.contains(where: { m.atMs >= $0.0 && m.atMs < $0.1 }) { effort[1] += m.durationSecs }
+                }
+                dayHr += ((try? w.service.hrSeries(fromMs: s, toMs: e, maxPoints: 100_000)) ?? []).filter { $0.bpm > 0 }.map { (Int64($0.atMs / 1000), Int($0.bpm)) }
             }
+            dayHr.sort { $0.0 < $1.0 }
+            effort[0] = max(0, tracked - effort[1] - effort[2])
             if steps > 0 {
                 lines.append("steps2,domain=sensor,entity_id=withings_steps value=\(steps)i \(stamp)")
                 lines.append("distance2,domain=sensor,entity_id=withings_distance value=\(Int(metres))i \(stamp)")
@@ -79,10 +91,14 @@ final class InfluxPusher {
                 lines.append("active2,domain=sensor,entity_id=withings_active value=\(effort[1] + effort[2])i \(stamp)")
             }
             if !dayHr.isEmpty {
-                let avg = dayHr.reduce(0, +) / dayHr.count
-                lines.append("hr,domain=sensor,entity_id=withings_hr_avg value=\(avg)i \(stamp + 1)")
-                lines.append("hr,domain=sensor,entity_id=withings_hr_max value=\(dayHr.max()!)i \(stamp + 1)")
-                lines.append("hr,domain=sensor,entity_id=withings_hr_min value=\(dayHr.min()!)i \(stamp + 1)")
+                let shape = Self.heartShape(dayHr)
+                let rates = dayHr.map(\.1)
+                lines.append("hr,domain=sensor,entity_id=withings_hr_avg value=\(shape.average)i \(stamp + 1)")
+                lines.append("hr,domain=sensor,entity_id=withings_hr_max value=\(rates.max()!)i \(stamp + 1)")
+                lines.append("hr,domain=sensor,entity_id=withings_hr_min value=\(rates.min()!)i \(stamp + 1)")
+                for (zone, seconds) in shape.zones.enumerated() {
+                    lines.append("hr_zone_\(zone),domain=sensor,entity_id=withings_hr_zone_\(zone) value=\(seconds)i \(stamp)")
+                }
             }
             day = next
         }
@@ -123,7 +139,7 @@ final class InfluxPusher {
             }
             for g in ((try? w.service.ecgs()) ?? []) where g.measuredAtMs >= fromMs {
                 let rhythm = g.rhythm.map { "\($0)" } ?? "none"
-                lines.append("watch_ecg,domain=sensor,entity_id=\(e),rhythm=\(rhythm) heart_rate=\(g.heartRate ?? 0)i,seconds=\(g.seconds) \(g.measuredAtMs / 1000)")
+                lines.append("watch_ecg,domain=sensor,entity_id=\(e),rhythm=\(rhythm) heart_rate=\(g.heartRate ?? 0)i \(g.measuredAtMs / 1000)")
             }
         }
 
@@ -157,6 +173,26 @@ final class InfluxPusher {
                 done("Influx: failed (\(code == 0 ? err?.localizedDescription ?? "offline" : "HTTP \(code)"))")
             }
         }.resume()
+    }
+
+    /// How the cloud turned readings into a day (fitted on its own history): heart rate is interpolated
+    /// second by second between readings up to 31 minutes apart; zones start at 95, 133 and 171 bpm.
+    static func heartShape(_ samples: [(Int64, Int)]) -> (zones: [Int64], average: Int) {
+        var zones: [Int64] = [0, 0, 0, 0]
+        var sum = 0.0, seconds = 0.0
+        func add(_ bpm: Double, _ n: Int64) {
+            zones[bpm >= 171 ? 3 : bpm >= 133 ? 2 : bpm >= 95 ? 1 : 0] += n
+            sum += bpm * Double(n); seconds += Double(n)
+        }
+        for (i, (t, h)) in samples.enumerated() {
+            if i + 1 < samples.count, samples[i + 1].0 - t <= 1860, samples[i + 1].0 > t {
+                let gap = samples[i + 1].0 - t, next = samples[i + 1].1
+                for u in 0..<gap { add(Double(h) + Double(next - h) * Double(u) / Double(gap), 1) }
+            } else {
+                add(Double(h), 60)     // an isolated reading stands for about a minute
+            }
+        }
+        return (zones, seconds > 0 ? Int(sum / seconds) : 0)
     }
 
     /// Local wall-clock seconds written as if they were UTC (the collectors' convention).
