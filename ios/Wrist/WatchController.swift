@@ -48,6 +48,17 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
     }
 
     let link = WatchLink()
+    private lazy var host: AncsHost = {
+        let h = AncsHost(queue: link.queue)
+        h.onControlWrite = { [weak self] bytes, limit in
+            guard let self, let u = self.ancsUnit else { return }
+            do { try u.service.onAncsWrite(bytes: bytes, maxPayload: UInt32(limit)) }
+            catch { AppLog.log("ancs write error: \(error)") }
+        }
+        return h
+    }()
+    /// All alerts go through one watch's core, so ids line up whichever watch asks for the text.
+    private var ancsUnit: Unit? { units.values.sorted { $0.record.entity < $1.record.entity }.first }
     private lazy var influx = InfluxPusher()
     private var units: [UUID: Unit] = [:]
     private var pairer: PairingService?
@@ -61,6 +72,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         super.init()
         link.delegate = self
         link.queue.async {
+            _ = self.host
             for record in Settings.watches { self.start(record) }
             self.publish()
         }
@@ -188,9 +200,9 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
     private func start(_ record: WatchRecord) {
         do {
             let service = try WatchService(dbPath: record.dbURL.path, mac: record.mac, secret: record.secret,
-                                           transport: ServiceTransport(self, record.id), ancs: NoAncs(),
+                                           transport: ServiceTransport(self, record.id), ancs: HostedAncs(host),
                                            rasterizer: WatchRasterizer())
-            service.setHoldSyncOk(hold: true)
+            service.preferNotifications(enabled: true)      // a reset leaves them off
             units[record.id] = Unit(record: record, service: service, raw: RawLog(prefix: record.entity, db: record.dbURL))
             link.connect(record.id)
             AppLog.log("started \(record.name) (\(record.entity))")
@@ -255,7 +267,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         let birth = want.birth_secs ?? held.birthSecs
         if held.weightGrams / 500 != want.weight_g / 500 || held.heightCm != want.height_cm || held.birthSecs != birth {
             do {
-                try u.service.setUser(birthSecs: birth, weightGrams: want.weight_g, heightCm: want.height_cm)
+                try u.service.setUser(birthSecs: birth, weightGrams: want.weight_g, heightCm: want.height_cm, firstName: want.name ?? "")
                 AppLog.log("\(u.record.entity) profile set: \(want.height_cm) cm, \(want.weight_g / 1000) kg\(want.birth_secs == nil ? ", birth unchanged" : "")")
             } catch { AppLog.log("\(u.record.entity) profile error: \(error)") }
         }
@@ -307,6 +319,20 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
             self.publish()
         }
     }
+
+    /// An alert to every watch listening, through Wrist's own Bluetooth alert service.
+    func notify(title: String, message: String) {
+        link.queue.async {
+            _ = self.host
+            guard let u = self.ancsUnit else { return }
+            let id = u.service.postNotification(appId: "com.jdubz.wrist", title: title, subtitle: "", message: message, category: .other)
+            AppLog.log("alert \(id) posted; \(self.host.listeners) watch(es) listening")
+        }
+    }
+
+    func handsStart(_ id: UUID) { with(id) { try? $0.service.handsCalibrationStart() } }
+    func handsMove(_ id: UUID, hand: UInt8, steps: Int16) { with(id) { try? $0.service.handsMove(hand: hand, steps: steps) } }
+    func handsStop(_ id: UUID) { with(id) { try? $0.service.handsCalibrationStop() } }
 
     func syncNow() { with(nil) { try? $0.service.syncNow() } }
 
@@ -408,8 +434,9 @@ private final class PairTransport: Transport {
     func reconnect() {}
 }
 
-/// iOS hosts the real ANCS service itself, so the watch reads notifications straight from the phone.
-private final class NoAncs: AncsLink {
-    func announce(bytes: Data) {}
-    func attributes(bytes: Data) {}
+private final class HostedAncs: AncsLink {
+    let host: AncsHost
+    init(_ host: AncsHost) { self.host = host }
+    func announce(bytes: Data) { host.announce(bytes) }
+    func attributes(bytes: Data) { host.attributes(bytes) }
 }

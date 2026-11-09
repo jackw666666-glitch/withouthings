@@ -213,6 +213,10 @@ struct SettingsView: View {
                         LabeledContent("Model", value: d.name)
                         LabeledContent("Firmware", value: "\(d.firmware)")
                     }
+                    Button("Send Test Notification") { watch.notify(title: "Wrist", message: "Test from Wrist") }
+                    if let id = card?.id {
+                        NavigationLink("Calibrate Hands") { HandsView(id: id) }
+                    }
                     Button("Forget Watch", role: .destructive) { confirmForget = true }
                 }
                 Section("Data") {
@@ -227,5 +231,39 @@ struct SettingsView: View {
                 Button("Forget", role: .destructive) { if let id = card?.id { watch.forget(id) }; dismiss() }
             }
         }
+    }
+}
+
+// MARK: - Hands
+
+struct HandsView: View {
+    @EnvironmentObject var watch: WatchController
+    let id: UUID
+    @State private var hand: UInt8 = 1
+
+    var body: some View {
+        VStack(spacing: 28) {
+            Text("Set The Hands To 12:00").font(.title3.bold())
+            Picker("Hand", selection: $hand) {
+                Text("Hour").tag(UInt8(1))
+                Text("Minute").tag(UInt8(0))
+                Text("Activity").tag(UInt8(2))
+            }
+            .pickerStyle(.segmented)
+            HStack(spacing: 14) {
+                step("-10", -10); step("-1", -1); step("+1", 1); step("+10", 10)
+            }
+        }
+        .padding(16)
+        .navigationTitle("Calibrate Hands")
+        .onAppear { watch.handsStart(id) }
+        .onDisappear { watch.handsStop(id) }
+    }
+
+    private func step(_ label: String, _ steps: Int16) -> some View {
+        Button(label) { watch.handsMove(id, hand: hand, steps: steps) }
+            .font(.title3.bold())
+            .frame(maxWidth: .infinity, minHeight: 56)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
     }
 }

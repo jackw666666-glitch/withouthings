@@ -123,9 +123,20 @@ impl WatchService {
         self.dispatch(actions)
     }
 
-    /// Keep the watch sending its once-a-minute sync request, so a suspended iOS app keeps being woken.
-    pub fn set_hold_sync_ok(&self, hold: bool) {
-        self.inner.lock().unwrap().client.set_hold_sync_ok(hold);
+    pub fn hands_calibration_start(&self) -> Result<(), WatchError> {
+        let actions = self.inner.lock().unwrap().client.hands_calibration_start(now());
+        self.dispatch(actions)
+    }
+
+    /// `hand`: 0 = minutes, 1 = hours, 2 = activity dial.
+    pub fn hands_move(&self, hand: u8, steps: i16) -> Result<(), WatchError> {
+        let actions = self.inner.lock().unwrap().client.hands_move(hand, steps, now());
+        self.dispatch(actions)
+    }
+
+    pub fn hands_calibration_stop(&self) -> Result<(), WatchError> {
+        let actions = self.inner.lock().unwrap().client.hands_calibration_stop(now());
+        self.dispatch(actions)
     }
 
     /// The per-minute activity the watch reported. (`series(Metric::Steps)` is the running daily
@@ -638,6 +649,7 @@ impl WatchService {
         birth_secs: i64,
         weight_grams: u32,
         height_cm: u32,
+        first_name: String,
     ) -> Result<(), WatchError> {
         let held = self
             .store
@@ -656,7 +668,13 @@ impl WatchService {
                 // A reset leaves id 0 and no name; the watch acknowledges such a profile but keeps
                 // nothing. Gadgetbridge always sends a non-zero id and a name.
                 id: if held.id == 0 { 123456 } else { held.id },
-                first_name: if held.first_name.is_empty() { "Jack".to_string() } else { held.first_name.clone() },
+                first_name: if !first_name.is_empty() {
+                    first_name
+                } else if !held.first_name.is_empty() {
+                    held.first_name.clone()
+                } else {
+                    "User".to_string()
+                },
                 birth: birth_secs as i32,
                 weight: weight_grams,
                 height: height_cm,

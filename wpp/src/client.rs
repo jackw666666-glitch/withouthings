@@ -707,9 +707,6 @@ pub struct Client {
     records_emitted: u64,
     unhandled: Vec<(u16, u16, &'static str)>,
     live_samples: Vec<i16>,
-    /// Leave CMD_SYNC_OK unsent. The watch then keeps sending its once-a-minute sync request,
-    /// which is what wakes a suspended iOS app; after a SYNC_OK it goes quiet and nothing does.
-    hold_sync_ok: bool,
     refreshes: RateLimit,
     walks: RateLimit,
     dumps: RateLimit,
@@ -741,7 +738,6 @@ impl Client {
             records_emitted: 0,
             unhandled: Vec::new(),
             live_samples: Vec::new(),
-            hold_sync_ok: false,
             refreshes: RateLimit::every(MIN_REFRESH_INTERVAL_MS),
             walks: RateLimit::every(MIN_WALK_INTERVAL_MS),
             dumps: RateLimit::every(MIN_DUMP_INTERVAL_MS),
@@ -769,8 +765,21 @@ impl Client {
         std::mem::take(&mut self.streams.unpersisted).into_iter().collect()
     }
 
-    pub fn set_hold_sync_ok(&mut self, hold: bool) {
-        self.hold_sync_ok = hold;
+    /// Hand calibration, as Gadgetbridge drives it: start, any number of moves, stop.
+    /// Hands: 0 = minutes, 1 = hours, 2 = activity dial.
+    pub fn hands_calibration_start(&mut self, now: UnixMillis) -> Vec<Action> {
+        self.noted(now, vec![Action::Send(Frame::new(Command::CMD_HANDS_CAL_START, Vec::new()))])
+    }
+
+    pub fn hands_move(&mut self, hand: u8, steps: i16, now: UnixMillis) -> Vec<Action> {
+        self.noted(now, vec![Action::Send(Frame::new(
+            Command::CMD_HANDS_MOVE,
+            vec![WppObject::HandsMove(crate::objects::HandsMove { hand, nb_steps: steps })],
+        ))])
+    }
+
+    pub fn hands_calibration_stop(&mut self, now: UnixMillis) -> Vec<Action> {
+        self.noted(now, vec![Action::Send(Frame::new(Command::CMD_HANDS_CAL_STOP, Vec::new()))])
     }
 
     pub fn sync_now(&mut self, now: UnixMillis) -> Vec<Action> {
@@ -1859,10 +1868,7 @@ impl Client {
             self.link.walk_since = Some(now);
             return self.request_current();
         }
-        let mut actions = Vec::new();
-        if !self.hold_sync_ok {
-            actions.push(Action::Send(Frame::new(Command::CMD_SYNC_OK, Vec::new())));
-        }
+        let mut actions = vec![Action::Send(Frame::new(Command::CMD_SYNC_OK, Vec::new()))];
         actions.extend(self.request_next_store(DRAINED_STORES.iter().rev().copied().collect(), now));
         actions
     }
@@ -4040,19 +4046,6 @@ mod tests {
         assert!(client
             .handle(Event::Tick { now: UnixMillis(1_000_000 + SILENCE_TIMEOUT_MS + 1) })
             .is_empty());
-    }
-
-    #[test]
-    fn a_held_sync_ok_is_not_sent_when_the_walk_ends() {
-        let mut client = authenticated();
-        client.set_hold_sync_ok(true);
-        let before = client.current().expect("a stream is open");
-        let cmd = stream_command(before.0).0;
-        let actions = client.handle(Event::Frame {
-            received_at: UnixMillis(5_000),
-            frame: Frame::new(Command::CMD_ERROR, vec![WppObject::Cmderror(Cmderror { cmd, err: -4 })]),
-        });
-        assert!(!actions.iter().any(|a| matches!(a, Action::Send(f) if f.command == Command::CMD_SYNC_OK)));
     }
 
     #[test]

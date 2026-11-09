@@ -860,7 +860,7 @@ class WatchViewModel : ViewModel() {
 
     fun applyUser(birthSecs: Long, weightGrams: UInt, heightCm: UInt) {
         save(
-            send = { it.setUser(birthSecs, weightGrams, heightCm) },
+            send = { it.setUser(birthSecs, weightGrams, heightCm, "") },
             reask = { it.requestDeviceConfig() },
             confirm = {
                 val held = it.snapshot().user

@@ -95,6 +95,7 @@ struct RemoteConfig: Decodable {
         var birth_secs: Int64?
         var weight_g: UInt32
         var height_cm: UInt32
+        var name: String?
     }
 
     static func load() -> RemoteConfig? {
