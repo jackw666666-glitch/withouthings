@@ -98,7 +98,9 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
 
     private func pairingProgressed() {
         guard let pairer else { return }
-        switch pairer.progress() {
+        let p = pairer.progress()
+        AppLog.log("pairing: \(p)")
+        switch p {
         case .paired(let mac, let secret):
             Settings.mac = mac
             Settings.secret = secret
@@ -128,13 +130,15 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         guard let service else { return }
         if now.timeIntervalSince(lastTick) >= 30 {
             lastTick = now
-            try? service.tick()
+            do { try service.tick() } catch { AppLog.log("tick error: \(error)") }
+            for u in service.unhandledObjects() { AppLog.log("unhandled: \(u)") }
             declareZone(service)
             if Settings.allDayScan, service.respiratoryScan() == nil { try? service.armRespiratoryScan() }
         }
         if now.timeIntervalSince(lastResync) >= 60 {
             lastResync = now
-            try? service.syncNow()
+            do { try service.syncNow() } catch { AppLog.log("sync error: \(error)") }
+            AppLog.log("progress \(service.progress())")
         }
         let day = ISO8601DateFormatter.string(from: now, timeZone: .current, formatOptions: [.withFullDate])
         if day != lastSnapshotDay {
@@ -143,7 +147,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         }
         if now.timeIntervalSince(lastPush) >= 300 {
             lastPush = now
-            influx.push(service) { text in self.ui { self.influxText = text } }
+            influx.push(service) { text in AppLog.log(text); self.ui { self.influxText = text } }
         }
         refresh()
     }
@@ -194,9 +198,10 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
     // MARK: WatchLinkDelegate (BLE queue)
 
     func linkReady() {
+        AppLog.log("link ready (\(pairer != nil ? "pairing" : "session"))")
         if let pairer { pairer.onConnected(); pairingProgressed(); return }
         guard let service else { return }
-        do { try service.onConnected() } catch { ui { self.linkState = "\(error)" } }
+        do { try service.onConnected() } catch { AppLog.log("onConnected error: \(error)"); ui { self.linkState = "\(error)" } }
         lastZoneOffset = nil
         declareZone(service)
         try? service.pollBattery()
@@ -206,11 +211,12 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
     func linkBytes(_ bytes: Data) {
         raw.fromWatch(bytes)
         if let pairer { pairer.onBytes(bytes: bytes); pairingProgressed(); return }
-        try? service?.onBytes(bytes: bytes, receivedAtMs: Int64(Date().timeIntervalSince1970 * 1000))
+        do { try service?.onBytes(bytes: bytes, receivedAtMs: Int64(Date().timeIntervalSince1970 * 1000)) } catch { AppLog.log("onBytes error: \(error)") }
         housekeeping()
     }
 
     func linkDisconnected() {
+        AppLog.log("link down: \(link.state)")
         pairer?.onDisconnected()
         service?.onDisconnected()
         let state = link.state
@@ -218,6 +224,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
     }
 
     func linkDiscovered(_ id: UUID, name: String, rssi: Int) {
+        AppLog.log("found \(name) rssi \(rssi)")
         ui {
             self.found.removeAll { $0.id == id }
             self.found.append(Found(id: id, name: name, rssi: rssi))

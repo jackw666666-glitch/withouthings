@@ -70,6 +70,9 @@ const MIN_REFRESH_INTERVAL_MS: i64 = 300_000;
 const MIN_WALK_INTERVAL_MS: i64 = 900_000;
 const MIN_DUMP_INTERVAL_MS: i64 = 900_000;
 const SILENCE_TIMEOUT_MS: i64 = 90_000;
+/// A history stream the watch never answers is skipped after this long. The watch keeps
+/// sending its once-a-minute sync request meanwhile, so the silence timeout never fires.
+const STREAM_TIMEOUT_MS: i64 = 30_000;
 /// The watch measures once a second but its readings carry no time and often
 /// reach the phone in pairs, so their arrival is not their time.
 const LIVE_HR_PERIOD: Duration = Duration::from_millis(1_000);
@@ -594,6 +597,8 @@ struct Link {
     last_heard: Option<UnixMillis>,
     last_spoke: Option<UnixMillis>,
     last_live_hr: Option<UnixMillis>,
+    /// When the open stream was last asked for or last answered.
+    walk_since: Option<UnixMillis>,
     measuring: Option<i16>,
     /// An ECG asked for by name when its measurement stopped. It runs alongside
     /// whatever the state is doing.
@@ -611,6 +616,7 @@ impl Link {
             last_heard: None,
             last_spoke: None,
             last_live_hr: None,
+            walk_since: None,
             measuring: None,
             fetching_ecg: false,
             signals: SignalCollector::new(),
@@ -879,6 +885,16 @@ impl Client {
     }
 
     fn on_tick(&mut self, now: UnixMillis) -> Vec<Action> {
+        if let State::Walking(stream) = self.link.state {
+            // Only while the watch is still talking (its sync pings): a fully silent watch is
+            // the silence timeout's job below, which reconnects instead.
+            let chatty = matches!((self.link.walk_since, self.link.last_heard), (Some(since), Some(heard)) if heard.0 > since.0);
+            if chatty && self.link.walk_since.is_some_and(|since| now.0 - since.0 > STREAM_TIMEOUT_MS) {
+                self.streams.done.push((stream.category, stream.through));
+                let actions = self.request_next(now);
+                return self.noted(now, actions);
+            }
+        }
         let Some(heard) = self.link.last_heard else {
             return Vec::new();
         };
@@ -1119,6 +1135,9 @@ impl Client {
             (State::Walking(stream), c) => {
                 let stream = *stream;
                 self.link.busy_retries = 0;
+                if stream_command(stream.category) == c {
+                    self.link.walk_since = Some(received_at);
+                }
                 let carries_records = frame
                     .objects
                     .iter()
@@ -1810,6 +1829,7 @@ impl Client {
                 through: from,
                 started_from: from,
             });
+            self.link.walk_since = Some(now);
             return self.request_current();
         }
         let mut actions = vec![Action::Send(Frame::new(Command::CMD_SYNC_OK, Vec::new()))];
@@ -3990,6 +4010,25 @@ mod tests {
         assert!(client
             .handle(Event::Tick { now: UnixMillis(1_000_000 + SILENCE_TIMEOUT_MS + 1) })
             .is_empty());
+    }
+
+    #[test]
+    fn a_stream_ignored_while_the_watch_keeps_pinging_is_skipped() {
+        let mut client = authenticated();
+        assert_eq!(client.phase(), Phase::Syncing);
+        let before = client.current();
+        // The watch pings for a sync every minute but never answers the open stream.
+        let ping = |ms: i64| Event::Frame {
+            received_at: UnixMillis(ms),
+            frame: Frame::new(Command::CMD_BATTERY_STATUS, Vec::new()),
+        };
+        client.handle(ping(5_000));
+        assert!(client.handle(Event::Tick { now: UnixMillis(20_000) }).is_empty(), "too early to give up");
+        client.handle(ping(40_000));
+        let actions = client.handle(Event::Tick { now: UnixMillis(45_000) });
+        assert!(!actions.contains(&Action::Reconnect));
+        assert!(actions.iter().any(|a| matches!(a, Action::Send(_))), "moves on to the next request");
+        assert_ne!(client.current(), before, "the ignored stream is no longer the open one");
     }
 
     #[test]

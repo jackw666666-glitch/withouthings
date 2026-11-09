@@ -32,7 +32,7 @@ final class WatchLink: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate 
     private var autoReconnect = true
     private var discovered: [UUID: CBPeripheral] = [:]
 
-    private(set) var state = "Starting"
+    private(set) var state = "Starting" { didSet { if state != oldValue { AppLog.log("ble: \(state)") } } }
 
     override init() {
         super.init()
