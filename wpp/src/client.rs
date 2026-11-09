@@ -1798,6 +1798,16 @@ impl Client {
         matches!(self.phase(), Phase::Syncing | Phase::Finished)
     }
 
+    /// A one-off heart-rate reading, as Gadgetbridge's "heart rate test" asks for it (CMD_GET_HR, no objects).
+    /// The reply's LiveHr is stored like any other live sample.
+    pub fn request_live_hr(&mut self, now: UnixMillis) -> Vec<Action> {
+        if self.link.measuring.is_some() || !self.answers_requests() {
+            return Vec::new();
+        }
+        let actions = vec![Action::Send(Frame::new(Command::CMD_GET_HR, Vec::new()))];
+        self.noted(now, actions)
+    }
+
     pub fn poll_battery(&mut self, now: UnixMillis) -> Vec<Action> {
         if self.link.measuring.is_some() || !self.answers_requests() {
             return Vec::new();

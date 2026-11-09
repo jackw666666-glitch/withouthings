@@ -39,6 +39,8 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         var lastSnapshotDay = ""
         var lastSync: Date?
         var lastBattery = Date.distantPast
+        var lastProfileCheck = Date.distantPast
+        var lastHrMs: Int64 = 0
         init(record: WatchRecord, service: WatchService, raw: RawLog) {
             self.record = record; self.service = service; self.raw = raw
         }
@@ -194,12 +196,40 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         }
         if case .finished = s.progress() {
             u.lastSync = now
+            syncProfile(u, now)
+            noticeWear(u)
             // The battery ask right after connecting lands before the handshake ends and is dropped: ask again here.
             if now.timeIntervalSince(u.lastBattery) >= 600 || (try? s.snapshot())?.battery == nil && now.timeIntervalSince(u.lastBattery) >= 60 {
                 u.lastBattery = now
                 do { try s.pollBattery() } catch { AppLog.log("\(u.record.entity) battery error: \(error)") }
             }
         }
+    }
+
+    /// Restore the user profile a reset wiped (height, weight, birth date), from the NUC's config.
+    private func syncProfile(_ u: Unit, _ now: Date) {
+        guard now.timeIntervalSince(u.lastProfileCheck) >= 600, let want = RemoteConfig.load()?.profile else { return }
+        u.lastProfileCheck = now
+        guard let held = (try? u.service.snapshot())?.user else {
+            try? u.service.requestDeviceConfig()     // the watch reports its profile with its config
+            return
+        }
+        let birth = want.birth_secs ?? held.birthSecs
+        if held.weightGrams / 500 != want.weight_g / 500 || held.heightCm != want.height_cm || held.birthSecs != birth {
+            do {
+                try u.service.setUser(birthSecs: birth, weightGrams: want.weight_g, heightCm: want.height_cm)
+                AppLog.log("\(u.record.entity) profile set: \(want.height_cm) cm, \(want.weight_g / 1000) kg\(want.birth_secs == nil ? ", birth unchanged" : "")")
+            } catch { AppLog.log("\(u.record.entity) profile error: \(error)") }
+        }
+    }
+
+    /// Put on after a break (no heart rate for 30+ minutes, then a reading): ask for a live reading right away.
+    private func noticeWear(_ u: Unit) {
+        guard let latest = (try? u.service.snapshot())?.latestHr?.atMs else { return }
+        defer { u.lastHrMs = max(u.lastHrMs, latest) }
+        guard u.lastHrMs > 0, latest > u.lastHrMs, latest - u.lastHrMs >= 30 * 60_000 else { return }
+        AppLog.log("\(u.record.entity) put on after \((latest - u.lastHrMs) / 60_000) min: live heart-rate reading")
+        do { try u.service.requestLiveHr() } catch { AppLog.log("\(u.record.entity) live HR error: \(error)") }
     }
 
     private func declareZone(_ u: Unit) {

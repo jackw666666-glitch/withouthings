@@ -123,6 +123,45 @@ impl WatchService {
         self.dispatch(actions)
     }
 
+    /// Ask the watch for a heart-rate reading now (used when the watch is put on).
+    pub fn request_live_hr(&self) -> Result<(), WatchError> {
+        let actions = self.inner.lock().unwrap().client.request_live_hr(now());
+        self.dispatch(actions)
+    }
+
+    /// Seconds spent at soft / moderate / intense effort between two instants, from the MET value
+    /// the watch reports for each activity minute: soft = [soft_met, moderate_met),
+    /// moderate = [moderate_met, intense_met), intense = >= intense_met.
+    pub fn intensity_seconds(
+        &self,
+        from_ms: i64,
+        to_ms: i64,
+        soft_met: f64,
+        moderate_met: f64,
+        intense_met: f64,
+    ) -> Result<Vec<i64>, WatchError> {
+        let store = self.store.lock().unwrap();
+        let minutes = store.activity_minutes(
+            self.device_id,
+            UnixMillis(from_ms).to_seconds(),
+            UnixMillis(to_ms).to_seconds(),
+        )?;
+        let mut out = vec![0i64; 3];
+        for m in minutes {
+            let Some(met) = m.met else { continue };
+            let met = met.raw() as f64 / 100.0;
+            let secs = m.duration.as_millis() / 1000;
+            if met >= intense_met {
+                out[2] += secs;
+            } else if met >= moderate_met {
+                out[1] += secs;
+            } else if met >= soft_met {
+                out[0] += secs;
+            }
+        }
+        Ok(out)
+    }
+
     pub fn poll_battery(&self) -> Result<(), WatchError> {
         let actions = {
             let mut inner = self.inner.lock().unwrap();

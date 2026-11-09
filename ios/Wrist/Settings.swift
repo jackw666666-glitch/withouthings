@@ -86,6 +86,16 @@ struct RemoteConfig: Decodable {
     var influx_bucket: String
     var influx_token: String
     var entity: String?
+    /// Basal kcal/day the Withings cloud added to active calories (total = active + bmr).
+    var bmr_kcal: Double?
+    /// The watch's user profile (a reset wipes it; calories and distance depend on it).
+    var profile: Profile?
+
+    struct Profile: Decodable {
+        var birth_secs: Int64?
+        var weight_g: UInt32
+        var height_cm: UInt32
+    }
 
     static func load() -> RemoteConfig? {
         let url = Settings.documents.appendingPathComponent("config.json")
