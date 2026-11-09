@@ -3,36 +3,41 @@ import Foundation
 
 protocol WatchLinkDelegate: AnyObject {
     /// Channel found and notifications on: the protocol can start.
-    func linkReady()
-    func linkBytes(_ bytes: Data)
-    func linkDisconnected()
+    func linkReady(_ id: UUID)
+    func linkBytes(_ id: UUID, _ bytes: Data)
+    func linkDisconnected(_ id: UUID)
     func linkDiscovered(_ id: UUID, name: String, rssi: Int)
 }
 
-/// CoreBluetooth port of withouthings' GattLink.kt.
+/// CoreBluetooth port of withouthings' GattLink.kt, holding any number of watches at once.
 /// - The protocol channel is a characteristic under a service whose UUID contains 5749-5448 ("WITH");
-///   ScanWatch 2 marks it ...494E4753 ("INGS"), the original ScanWatch uses 00000024-5749-5448-005d-...
+///   ScanWatch 2 marks it ...494E4753 ("INGS"), ScanWatch 1 uses ...-5749-5448-005d-..., Steel HR ...-5749-5448-0037-...
 /// - The ScanWatch 1 refuses the CCCD write until link encryption is up, so subscribing waits 2 s and retries.
-/// - Writes are one at a time, chunked to the link's write size.
+/// - Writes are one at a time per watch, chunked to the link's write size.
 /// - iOS keeps a pending connect alive forever, including in the background, so after a drop we just connect again.
 /// Everything runs on `queue`; callers may call in from any thread.
 final class WatchLink: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     let queue = DispatchQueue(label: "wrist.ble")
     weak var delegate: WatchLinkDelegate?
 
-    private var central: CBCentralManager!
-    private var peripheral: CBPeripheral?
-    private var channel: CBCharacteristic?
-    private var notifying = false
-    private var ready = false
-    private var inFlight = false
-    private var pending: [Data] = []
-    private var subscribeAttempts = 0
-    private var scanning = false
-    private var autoReconnect = true
-    private var discovered: [UUID: CBPeripheral] = [:]
+    private final class Session {
+        let peripheral: CBPeripheral
+        var channel: CBCharacteristic?
+        var notifying = false
+        var ready = false
+        var inFlight = false
+        var pending: [Data] = []
+        var subscribeAttempts = 0
+        var autoReconnect = true
+        var state = "Connecting"
+        init(_ p: CBPeripheral) { peripheral = p }
+    }
 
-    private(set) var state = "Starting" { didSet { if state != oldValue { AppLog.log("ble: \(state)") } } }
+    private var central: CBCentralManager!
+    private var sessions: [UUID: Session] = [:]
+    private var wanted: Set<UUID> = []
+    private var scanning = false
+    private var discovered: [UUID: CBPeripheral] = [:]
 
     override init() {
         super.init()
@@ -41,6 +46,9 @@ final class WatchLink: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate 
             CBCentralManagerOptionShowPowerAlertKey: true,
         ])
     }
+
+    /// Call on `queue`.
+    func state(_ id: UUID) -> String { sessions[id]?.state ?? (central.state == .poweredOn ? "Waiting for watch" : "Bluetooth off") }
 
     // MARK: public (any thread)
 
@@ -55,7 +63,7 @@ final class WatchLink: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate 
                 self.delegate?.linkDiscovered(p.identifier, name: p.name ?? "Watch", rssi: 0)
             }
             self.central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
-            self.state = "Scanning"
+            AppLog.log("ble: scanning")
         }
     }
 
@@ -66,38 +74,42 @@ final class WatchLink: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate 
         }
     }
 
-    /// Connect to a discovered watch (pairing) or the remembered one.
+    /// Connect to a discovered watch (pairing) or a remembered one, and keep reconnecting.
     func connect(_ id: UUID) {
         queue.async {
-            self.autoReconnect = true
-            let p = self.discovered[id] ?? self.central.retrievePeripherals(withIdentifiers: [id]).first
-            guard let p else { self.state = "Watch not found"; return }
+            self.wanted.insert(id)
+            guard self.central.state == .poweredOn else { return }
+            let p = self.sessions[id]?.peripheral ?? self.discovered[id] ?? self.central.retrievePeripherals(withIdentifiers: [id]).first
+            guard let p else { AppLog.log("ble: \(id) not found"); return }
             self.open(p)
         }
     }
 
-    func write(_ frames: [Data]) {
+    func write(_ id: UUID, _ frames: [Data]) {
         queue.async {
-            guard let p = self.peripheral else { return }
-            let type: CBCharacteristicWriteType = (self.channel?.properties.contains(.write) ?? true) ? .withResponse : .withoutResponse
-            let limit = max(1, p.maximumWriteValueLength(for: type))
+            guard let s = self.sessions[id] else { return }
+            let type: CBCharacteristicWriteType = (s.channel?.properties.contains(.write) ?? true) ? .withResponse : .withoutResponse
+            let limit = max(1, s.peripheral.maximumWriteValueLength(for: type))
             for frame in frames {
                 var offset = 0
                 while offset < frame.count {
                     let end = min(offset + limit, frame.count)
-                    self.pending.append(frame.subdata(in: offset..<end))
+                    s.pending.append(frame.subdata(in: offset..<end))
                     offset = end
                 }
             }
-            self.pump()
+            self.pump(s)
         }
     }
 
-    /// Drop the link; it reconnects by itself unless `stay` is false.
-    func drop(stay: Bool = true) {
+    /// Drop a link; it reconnects by itself unless `stay` is false (then the watch is let go).
+    func drop(_ id: UUID, stay: Bool = true) {
         queue.async {
-            self.autoReconnect = stay
-            if let p = self.peripheral { self.central.cancelPeripheralConnection(p) }
+            if !stay { self.wanted.remove(id) }
+            guard let s = self.sessions[id] else { return }
+            s.autoReconnect = stay
+            self.central.cancelPeripheralConnection(s.peripheral)
+            if !stay { self.sessions[id] = nil }
         }
     }
 
@@ -110,27 +122,25 @@ final class WatchLink: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate 
     ]
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        switch central.state {
-        case .poweredOn:
-            if scanning { startScan() }
-            if peripheral == nil, let id = Settings.peripheralId,
-               let p = central.retrievePeripherals(withIdentifiers: [id]).first {
+        AppLog.log("ble: central state \(central.state.rawValue)")
+        guard central.state == .poweredOn else { return }
+        if scanning { startScan() }
+        for id in wanted {
+            if let s = sessions[id] {
+                if s.peripheral.state != .connected { central.connect(s.peripheral, options: nil) }
+            } else if let p = central.retrievePeripherals(withIdentifiers: [id]).first {
                 open(p)
-            } else if let p = peripheral, p.state != .connected {
-                central.connect(p, options: nil)
             }
-        case .poweredOff: state = "Bluetooth off"
-        case .unauthorized: state = "Bluetooth not allowed"
-        default: break
         }
     }
 
     func centralManager(_ central: CBCentralManager, willRestoreState dict: [String: Any]) {
-        // Relaunched in the background by iOS for our watch.
-        if let restored = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral],
-           let p = restored.first(where: { $0.identifier == Settings.peripheralId }) ?? restored.first {
-            peripheral = p
+        // Relaunched in the background by iOS for our watches.
+        for p in (dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral]) ?? [] {
+            let s = Session(p)
+            sessions[p.identifier] = s
             p.delegate = self
+            AppLog.log("ble: restored \(p.name ?? p.identifier.uuidString)")
         }
     }
 
@@ -144,15 +154,16 @@ final class WatchLink: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate 
 
     static func looksLikeWatch(_ name: String) -> Bool {
         let n = name.lowercased()
-        return n.hasPrefix("scanwatch") || n.hasPrefix("steel hr") || n.hasPrefix("withings") || n.hasPrefix("hwa")
+        return n.hasPrefix("scanwatch") || n.hasPrefix("steel") || n.hasPrefix("withings") || n.hasPrefix("hwa") || n.hasPrefix("activit")
     }
 
     private func open(_ p: CBPeripheral) {
-        if let old = peripheral, old.identifier != p.identifier { central.cancelPeripheralConnection(old) }
-        resetChannel()
-        peripheral = p
+        let s = sessions[p.identifier] ?? Session(p)
+        reset(s)
+        s.autoReconnect = true
+        sessions[p.identifier] = s
         p.delegate = self
-        state = "Connecting"
+        set(s, "Connecting")
         if p.state == .connected {
             p.discoverServices(nil)
         } else {
@@ -160,33 +171,38 @@ final class WatchLink: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate 
         }
     }
 
+    private func set(_ s: Session, _ state: String) {
+        if s.state != state { AppLog.log("ble \(s.peripheral.name ?? "?"): \(state)") }
+        s.state = state
+    }
+
     func centralManager(_ central: CBCentralManager, didConnect p: CBPeripheral) {
-        guard p == peripheral else { return }
-        state = "Connected"
+        guard let s = sessions[p.identifier] else { return }
+        set(s, "Connected")
         p.discoverServices(nil)
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect p: CBPeripheral, error: Error?) {
-        guard p == peripheral else { return }
-        state = "Retrying"
-        queue.asyncAfter(deadline: .now() + 5) { if self.autoReconnect { central.connect(p, options: nil) } }
+        guard let s = sessions[p.identifier] else { return }
+        set(s, "Retrying")
+        queue.asyncAfter(deadline: .now() + 5) { if s.autoReconnect { central.connect(p, options: nil) } }
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
-        guard p == peripheral else { return }
-        resetChannel()
-        state = autoReconnect ? "Waiting for watch" : "Disconnected"
-        delegate?.linkDisconnected()
-        if autoReconnect { central.connect(p, options: nil) }
+        guard let s = sessions[p.identifier] else { return }
+        reset(s)
+        set(s, s.autoReconnect ? "Waiting for watch" : "Disconnected")
+        delegate?.linkDisconnected(p.identifier)
+        if s.autoReconnect { central.connect(p, options: nil) }
     }
 
-    private func resetChannel() {
-        channel = nil
-        notifying = false
-        ready = false
-        inFlight = false
-        pending.removeAll()
-        subscribeAttempts = 0
+    private func reset(_ s: Session) {
+        s.channel = nil
+        s.notifying = false
+        s.ready = false
+        s.inFlight = false
+        s.pending.removeAll()
+        s.subscribeAttempts = 0
     }
 
     // MARK: peripheral
@@ -194,16 +210,17 @@ final class WatchLink: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate 
     func peripheral(_ p: CBPeripheral, didDiscoverServices error: Error?) {
         guard error == nil else { central.cancelPeripheralConnection(p); return }
         let ours = (p.services ?? []).filter { $0.uuid.uuidString.uppercased().contains("5749-5448") }
-        if ours.isEmpty { state = "No Withings service"; return }
+        if ours.isEmpty, let s = sessions[p.identifier] { set(s, "No Withings service"); return }
         ours.forEach { p.discoverCharacteristics(nil, for: $0) }
     }
 
     func peripheral(_ p: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
-        guard channel == nil, let found = (service.characteristics ?? []).first(where: Self.isProtocolChannel) else { return }
-        channel = found
-        subscribeAttempts = 0
+        guard let s = sessions[p.identifier], s.channel == nil,
+              let found = (service.characteristics ?? []).first(where: Self.isProtocolChannel) else { return }
+        s.channel = found
+        s.subscribeAttempts = 0
         // SW1: wait for encryption to settle before the CCCD write.
-        queue.asyncAfter(deadline: .now() + 2) { self.subscribe() }
+        queue.asyncAfter(deadline: .now() + 2) { self.subscribe(s) }
     }
 
     static func isProtocolChannel(_ c: CBCharacteristic) -> Bool {
@@ -213,64 +230,67 @@ final class WatchLink: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate 
         return c.properties.contains(.notify) || c.properties.contains(.indicate)
     }
 
-    private func subscribe() {
-        guard let p = peripheral, let c = channel, p.state == .connected else { return }
-        subscribeAttempts += 1
-        p.setNotifyValue(true, for: c)
+    private func subscribe(_ s: Session) {
+        guard let c = s.channel, s.peripheral.state == .connected else { return }
+        s.subscribeAttempts += 1
+        s.peripheral.setNotifyValue(true, for: c)
     }
 
     func peripheral(_ p: CBPeripheral, didUpdateNotificationStateFor c: CBCharacteristic, error: Error?) {
-        guard c == channel else { return }
+        guard let s = sessions[p.identifier], c == s.channel else { return }
         if let error {
             // Insufficient authentication/encryption: iOS pairs and we try again.
-            if subscribeAttempts < 5 {
-                state = "Securing link (\(subscribeAttempts))"
-                queue.asyncAfter(deadline: .now() + 1.5) { self.subscribe() }
+            if s.subscribeAttempts < 5 {
+                set(s, "Securing link (\(s.subscribeAttempts))")
+                queue.asyncAfter(deadline: .now() + 1.5) { self.subscribe(s) }
             } else {
-                state = "Subscribe failed: \(error.localizedDescription)"
+                set(s, "Subscribe failed: \(error.localizedDescription)")
                 central.cancelPeripheralConnection(p)
             }
             return
         }
-        notifying = c.isNotifying
-        guard notifying, !ready else { return }
-        ready = true
-        state = "Linked"
-        delegate?.linkReady()
-        pump()
+        s.notifying = c.isNotifying
+        guard s.notifying, !s.ready else { return }
+        s.ready = true
+        set(s, "Linked")
+        delegate?.linkReady(p.identifier)
+        pump(s)
     }
 
     func peripheral(_ p: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
         // SW1 sends Service Changed right after connecting: handles may have moved.
-        resetChannel()
+        guard let s = sessions[p.identifier] else { return }
+        reset(s)
         p.discoverServices(nil)
     }
 
     func peripheral(_ p: CBPeripheral, didUpdateValueFor c: CBCharacteristic, error: Error?) {
-        guard c == channel, error == nil, let value = c.value else { return }
-        delegate?.linkBytes(value)
+        guard let s = sessions[p.identifier], c == s.channel, error == nil, let value = c.value else { return }
+        delegate?.linkBytes(p.identifier, value)
     }
 
     func peripheral(_ p: CBPeripheral, didWriteValueFor c: CBCharacteristic, error: Error?) {
-        inFlight = false
-        pump()
+        guard let s = sessions[p.identifier] else { return }
+        s.inFlight = false
+        pump(s)
     }
 
     func peripheralIsReady(toSendWriteWithoutResponse p: CBPeripheral) {
-        inFlight = false
-        pump()
+        guard let s = sessions[p.identifier] else { return }
+        s.inFlight = false
+        pump(s)
     }
 
-    private func pump() {
-        guard !inFlight, notifying, let p = peripheral, let c = channel, !pending.isEmpty else { return }
-        let next = pending.removeFirst()
+    private func pump(_ s: Session) {
+        guard !s.inFlight, s.notifying, let c = s.channel, !s.pending.isEmpty else { return }
+        let next = s.pending.removeFirst()
         if c.properties.contains(.write) {
-            p.writeValue(next, for: c, type: .withResponse)
-            inFlight = true
+            s.peripheral.writeValue(next, for: c, type: .withResponse)
+            s.inFlight = true
         } else {
-            guard p.canSendWriteWithoutResponse else { pending.insert(next, at: 0); inFlight = true; return }
-            p.writeValue(next, for: c, type: .withoutResponse)
-            queue.async { self.pump() }
+            guard s.peripheral.canSendWriteWithoutResponse else { s.pending.insert(next, at: 0); s.inFlight = true; return }
+            s.peripheral.writeValue(next, for: c, type: .withoutResponse)
+            queue.async { self.pump(s) }
         }
     }
 }

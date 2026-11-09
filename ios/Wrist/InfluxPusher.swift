@@ -9,17 +9,17 @@ import Foundation
 final class InfluxPusher {
     private var busy = false
 
-    func push(_ service: WatchService, done: @escaping (String) -> Void) {
+    /// Both watches are summed, as the Withings cloud did: per minute, per day. Heart rate from either watch.
+    func push(_ watches: [(service: WatchService, entity: String)], done: @escaping (String) -> Void) {
         guard !busy, let cfg = RemoteConfig.load() else {
             if RemoteConfig.load() == nil { done("Influx: no config yet") }
             return
         }
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
         let fromMs = max(Settings.influxWatermarkMs, nowMs - 3 * 86_400_000)
-        let entity = cfg.entity ?? "scanwatch"
         var lines: [String] = []
 
-        // Per-minute activity (increments per minute).
+        // Per-minute activity (increments per minute), summed across watches.
         let metrics: [(Metric, String, String)] = [
             (.steps, "time_steps", "withings_time_steps"),
             (.distance, "time_distance", "withings_time_distance"),
@@ -27,18 +27,21 @@ final class InfluxPusher {
             (.calories, "time_calories", "withings_time_caloires"),
         ]
         for (metric, measurement, id) in metrics {
-            let points = (try? service.series(metric: metric, fromMs: fromMs, toMs: nowMs, maxPoints: 100_000)) ?? []
             var minutes: [Int64: Double] = [:]
-            for p in points { minutes[Self.localStamp(p.atMs) / 60 * 60, default: 0] += p.value }
+            for w in watches {
+                let points = (try? w.service.series(metric: metric, fromMs: fromMs, toMs: nowMs, maxPoints: 100_000)) ?? []
+                for p in points { minutes[Self.localStamp(p.atMs) / 60 * 60, default: 0] += p.value }
+            }
             for (t, v) in minutes where v > 0 || metric == .steps {
                 lines.append("\(measurement),domain=sensor,entity_id=\(id) value=\(Int(v))i \(t)")
             }
         }
 
         // Heart rate per reading.
-        let hr = (try? service.hrSeries(fromMs: fromMs, toMs: nowMs, maxPoints: 100_000)) ?? []
-        for p in hr where p.bpm > 0 {
-            lines.append("time_hr,domain=sensor,entity_id=withings_time_hr value=\(p.bpm)i \(Self.localStamp(p.atMs))")
+        for w in watches {
+            for p in ((try? w.service.hrSeries(fromMs: fromMs, toMs: nowMs, maxPoints: 100_000)) ?? []) where p.bpm > 0 {
+                lines.append("time_hr,domain=sensor,entity_id=withings_time_hr value=\(p.bpm)i \(Self.localStamp(p.atMs))")
+            }
         }
 
         // Daily rows for each local day touched by the window.
@@ -48,12 +51,19 @@ final class InfluxPusher {
             let next = cal.date(byAdding: .day, value: 1, to: day)!
             let s = Int64(day.timeIntervalSince1970 * 1000), e = Int64(next.timeIntervalSince1970 * 1000)
             let stamp = Self.dayStamp(day)
-            if let t = try? service.activityTotals(fromMs: s, toMs: e), t.steps > 0 {
-                lines.append("steps2,domain=sensor,entity_id=withings_steps value=\(t.steps)i \(stamp)")
-                lines.append("distance2,domain=sensor,entity_id=withings_distance value=\(Int(t.distanceMetres))i \(stamp)")
-                lines.append("elevation,domain=sensor,entity_id=withings_elevation value=\(Int(t.ascentMetres))i \(stamp)")
+            var steps: Int64 = 0, metres = 0.0, ascent = 0.0
+            var dayHr: [Int] = []
+            for w in watches {
+                if let t = try? w.service.activityTotals(fromMs: s, toMs: e) {
+                    steps += t.steps; metres += t.distanceMetres; ascent += t.ascentMetres
+                }
+                dayHr += ((try? w.service.hrSeries(fromMs: s, toMs: e, maxPoints: 100_000)) ?? []).map { Int($0.bpm) }.filter { $0 > 0 }
             }
-            let dayHr = ((try? service.hrSeries(fromMs: s, toMs: e, maxPoints: 100_000)) ?? []).map { Int($0.bpm) }.filter { $0 > 0 }
+            if steps > 0 {
+                lines.append("steps2,domain=sensor,entity_id=withings_steps value=\(steps)i \(stamp)")
+                lines.append("distance2,domain=sensor,entity_id=withings_distance value=\(Int(metres))i \(stamp)")
+                lines.append("elevation,domain=sensor,entity_id=withings_elevation value=\(Int(ascent))i \(stamp)")
+            }
             if !dayHr.isEmpty {
                 let avg = dayHr.reduce(0, +) / dayHr.count
                 lines.append("hr,domain=sensor,entity_id=withings_hr_avg value=\(avg)i \(stamp + 1)")
@@ -63,12 +73,12 @@ final class InfluxPusher {
             day = next
         }
 
-        // Battery: the old 3-level band (HA sensors read it) + the real percentage in a new series.
-        if let b = (try? service.snapshot())?.battery {
+        // Battery per watch: the old 3-level band (HA sensors read it) + the real percentage in a new series.
+        for w in watches {
+            guard let b = (try? w.service.snapshot())?.battery else { continue }
             let band = b.percent <= 20 ? "low" : (b.percent <= 60 ? "medium" : "high")
-            let stamp = Self.dayStamp(Date())
-            lines.append("battery2,domain=sensor,entity_id=\(entity) value=\"\(band)\" \(stamp)")
-            lines.append("watch_battery_pct,domain=sensor,entity_id=\(entity) value=\(b.percent)i \(b.atMs / 1000)")
+            lines.append("battery2,domain=sensor,entity_id=\(w.entity) value=\"\(band)\" \(Self.dayStamp(Date()))")
+            lines.append("watch_battery_pct,domain=sensor,entity_id=\(w.entity) value=\(b.percent)i \(b.atMs / 1000)")
         }
 
         guard !lines.isEmpty else { done("Influx: nothing new"); return }

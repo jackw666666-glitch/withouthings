@@ -6,25 +6,34 @@ enum Settings {
     private static let d = UserDefaults.standard
 
     static var documents: URL { FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0] }
-    static var dbURL: URL { documents.appendingPathComponent("wpp.sqlite") }
 
-    static var mac: String? {
-        get { d.string(forKey: "mac") }
-        set { d.set(newValue, forKey: "mac") }
+    /// Every paired watch. A watch's database and raw log are named after its `entity`.
+    static var watches: [WatchRecord] {
+        get {
+            if let data = d.data(forKey: "watches"), let list = try? JSONDecoder().decode([WatchRecord].self, from: data) {
+                return list
+            }
+            // v0.1 kept a single watch in loose keys: carry it over.
+            if let mac = d.string(forKey: "mac"), let secret = d.string(forKey: "secret"),
+               let id = d.string(forKey: "peripheral").flatMap(UUID.init(uuidString:)) {
+                let name = d.string(forKey: "watchName") ?? "ScanWatch"
+                let migrated = [WatchRecord(id: id, mac: mac, secret: secret, name: name,
+                                            entity: WatchRecord.entity(for: name), db: "wpp.sqlite")]
+                self.watches = migrated
+                return migrated
+            }
+            return []
+        }
+        set { d.set(try? JSONEncoder().encode(newValue), forKey: "watches") }
     }
-    static var secret: String? {
-        get { d.string(forKey: "secret") }
-        set { d.set(newValue, forKey: "secret") }
+
+    static func save(_ watch: WatchRecord) {
+        var list = watches.filter { $0.id != watch.id && $0.mac != watch.mac }
+        list.append(watch)
+        watches = list
     }
-    static var peripheralId: UUID? {
-        get { d.string(forKey: "peripheral").flatMap(UUID.init(uuidString:)) }
-        set { d.set(newValue?.uuidString, forKey: "peripheral") }
-    }
-    static var watchName: String {
-        get { d.string(forKey: "watchName") ?? "" }
-        set { d.set(newValue, forKey: "watchName") }
-    }
-    static var paired: Bool { mac != nil && secret != nil && peripheralId != nil }
+
+    static func remove(_ id: UUID) { watches = watches.filter { $0.id != id } }
 
     /// Withings protocol account id: random, chosen once.
     static var accountId: UInt32 {
@@ -49,9 +58,22 @@ enum Settings {
         get { Int64(d.double(forKey: "influxWatermark")) }
         set { d.set(Double(newValue), forKey: "influxWatermark") }
     }
+}
 
-    static func forget() {
-        for k in ["mac", "secret", "peripheral", "watchName", "influxWatermark"] { d.removeObject(forKey: k) }
+struct WatchRecord: Codable, Identifiable, Equatable {
+    var id: UUID          // CoreBluetooth peripheral identifier
+    var mac: String
+    var secret: String
+    var name: String
+    var entity: String    // InfluxDB entity_id for this watch's battery: "scanwatch" / "steelhr"
+    var db: String        // database file in Documents
+
+    var dbURL: URL { Settings.documents.appendingPathComponent(db) }
+
+    static func entity(for name: String) -> String {
+        let n = name.lowercased()
+        if n.contains("steel") || n.contains("activit") { return "steelhr" }
+        return "scanwatch"
     }
 }
 

@@ -24,19 +24,27 @@ struct RootView: View {
 struct NowView: View {
     @EnvironmentObject var watch: WatchController
     @State private var showSettings = false
+    @State private var showPair = false
 
     var body: some View {
+        let card = watch.current
         NavigationStack {
             ScrollView {
                 VStack(spacing: 20) {
-                    hero
-                    HStack(spacing: 12) {
-                        Tile(title: "Steps", value: watch.snapshot?.steps.map { "\($0.count)" } ?? "–", symbol: "figure.walk")
-                        Tile(title: "Battery", value: watch.snapshot?.battery.map { "\($0.percent)%" } ?? "–", symbol: batterySymbol)
+                    if watch.cards.count > 1 {
+                        Picker("Watch", selection: Binding(get: { watch.current?.id }, set: { watch.selected = $0 })) {
+                            ForEach(watch.cards) { c in Text(c.name).tag(Optional(c.id)) }
+                        }
+                        .pickerStyle(.segmented)
                     }
-                    if !watch.hrToday.isEmpty { HeartLine(points: watch.hrToday).frame(height: 90) }
+                    hero(card)
+                    HStack(spacing: 12) {
+                        Tile(title: "Steps", value: card?.snapshot?.steps.map { "\($0.count)" } ?? "–", symbol: "figure.walk")
+                        Tile(title: "Battery", value: card?.snapshot?.battery.map { "\($0.percent)%" } ?? "–", symbol: batterySymbol(card))
+                    }
+                    if let hr = card?.hrToday, !hr.isEmpty { HeartLine(points: hr).frame(height: 90) }
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(syncLine).font(.footnote).foregroundStyle(.secondary)
+                        Text(syncLine(card)).font(.footnote).foregroundStyle(.secondary)
                         if !watch.influxText.isEmpty { Text(watch.influxText).font(.footnote).foregroundStyle(.secondary) }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -46,24 +54,28 @@ struct NowView: View {
             .refreshable { watch.syncNow() }
             .background(Color.black.ignoresSafeArea())
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { showPair = true; watch.startPairing() } label: { Image(systemName: "plus") }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { showSettings = true } label: { Image(systemName: "gearshape.fill") }
                 }
             }
             .sheet(isPresented: $showSettings) { SettingsView() }
+            .sheet(isPresented: $showPair, onDismiss: { watch.cancelPairing() }) { PairView() }
+            .onChange(of: watch.pairing) { _, on in if !on { showPair = false } }
         }
     }
 
-    private var hero: some View {
+    private func hero(_ card: WatchController.Card?) -> some View {
         VStack(spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(watch.snapshot?.latestHr.map { "\($0.bpm)" } ?? "–")
+                Text(card?.snapshot?.latestHr.map { "\($0.bpm)" } ?? "–")
                     .font(.system(size: 88, weight: .bold, design: .rounded))
                 Text("bpm").font(.title3.weight(.semibold)).foregroundStyle(.secondary)
             }
-            Text(Settings.watchName.isEmpty ? "Watch" : Settings.watchName)
-                .font(.headline).foregroundStyle(.secondary)
-            Chip(text: watch.linkState, on: watch.linkState == "Linked")
+            Text(card?.name ?? "Watch").font(.headline).foregroundStyle(.secondary)
+            Chip(text: card?.state ?? "–", on: card?.state == "Linked")
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 28)
@@ -73,13 +85,13 @@ struct NowView: View {
             in: RoundedRectangle(cornerRadius: 28, style: .continuous))
     }
 
-    private var batterySymbol: String {
-        guard let p = watch.snapshot?.battery?.percent else { return "battery.0" }
+    private func batterySymbol(_ card: WatchController.Card?) -> String {
+        guard let p = card?.snapshot?.battery?.percent else { return "battery.0" }
         return p > 75 ? "battery.100" : p > 50 ? "battery.75" : p > 25 ? "battery.50" : "battery.25"
     }
 
-    private var syncLine: String {
-        guard let d = watch.lastSync else { return "Not synced yet" }
+    private func syncLine(_ card: WatchController.Card?) -> String {
+        guard let d = card?.lastSync else { return "Not synced yet" }
         let f = DateFormatter(); f.dateFormat = "h:mm a"
         return "Synced \(f.string(from: d))"
     }
@@ -174,6 +186,7 @@ struct SettingsView: View {
     @State private var confirmForget = false
 
     var body: some View {
+        let card = watch.current
         NavigationStack {
             Form {
                 Section("Measurements") {
@@ -181,15 +194,15 @@ struct SettingsView: View {
                         .onChange(of: allDay) { _, on in watch.setAllDayScan(on) }
                     ForEach(features, id: \.id) { f in
                         Toggle(f.name, isOn: Binding(get: { f.enabled }, set: { on in
-                            watch.setHealthFeature(f.id, on)
+                            if let id = card?.id { watch.setHealthFeature(id, f.id, on) }
                             if let i = features.firstIndex(where: { $0.id == f.id }) { features[i].enabled = on }
                         }))
                     }
                 }
-                Section("Watch") {
+                Section(card?.name ?? "Watch") {
                     Toggle("Notifications", isOn: $notifications)
-                        .onChange(of: notifications) { _, on in watch.setNotifications(on) }
-                    if let d = watch.snapshot?.device {
+                        .onChange(of: notifications) { _, on in if let id = card?.id { watch.setNotifications(id, on) } }
+                    if let d = card?.snapshot?.device {
                         LabeledContent("Model", value: d.name)
                         LabeledContent("Firmware", value: "\(d.firmware)")
                     }
@@ -202,9 +215,9 @@ struct SettingsView: View {
             }
             .navigationTitle("Settings")
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
-            .onAppear { features = watch.healthFeatures() }
-            .confirmationDialog("Forget this watch?", isPresented: $confirmForget) {
-                Button("Forget", role: .destructive) { watch.forget(); dismiss() }
+            .onAppear { if let id = card?.id { features = watch.healthFeatures(id) } }
+            .confirmationDialog("Forget \(card?.name ?? "this watch")?", isPresented: $confirmForget) {
+                Button("Forget", role: .destructive) { if let id = card?.id { watch.forget(id) }; dismiss() }
             }
         }
     }
