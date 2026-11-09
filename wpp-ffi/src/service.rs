@@ -149,12 +149,32 @@ impl WatchService {
 
     /// Drop the sleep-only features (SpO2 during sleep = 5, breathing scan = 9 and 11) for a watch
     /// that is never worn in bed.
-    pub fn drop_sleep_features(&self) -> Result<(), WatchError> {
+    pub fn drop_sleep_features(&self, keep: Vec<u16>) -> Result<(), WatchError> {
         let mut features = self.enabled_features();
         let before = features.len();
-        features.retain(|f| f.id != FeatureId(5) && f.id != RESPIRATORY_SCAN_MONITORING && f.id != FeatureId(11));
+        features.retain(|f| keep.contains(&f.id.0) || (f.id != FeatureId(5) && f.id != RESPIRATORY_SCAN_MONITORING && f.id != FeatureId(11)));
         if features.len() == before {
             return Ok(());
+        }
+        self.commit_features(features)
+    }
+
+    /// Switch one watch feature: window_minutes < 0 removes it, 0 makes it permanent, > 0 arms it
+    /// from now for that many minutes. For experiments driven from the NUC.
+    pub fn set_feature(&self, id: u16, window_minutes: i32) -> Result<(), WatchError> {
+        let mut features = self.enabled_features();
+        features.retain(|f| f.id.0 != id);
+        if window_minutes == 0 {
+            features.push(Feature { id: FeatureId(id), schedule: FeatureSchedule::Permanent });
+        } else if window_minutes > 0 {
+            let start = now().to_seconds();
+            features.push(Feature {
+                id: FeatureId(id),
+                schedule: FeatureSchedule::Window {
+                    start,
+                    end: start + wpp::units::Duration::from_secs(window_minutes as i64 * 60),
+                },
+            });
         }
         self.commit_features(features)
     }

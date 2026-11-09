@@ -92,6 +92,8 @@ final class InfluxPusher {
             let model = w.entity == "steelhr" ? "55" : "93"
             for wk in ((try? w.service.workoutsBetween(fromMs: fromMs, toMs: nowMs)) ?? []) {
                 guard let end = wk.endedAtMs else { continue }
+                let bursts = UserDefaults.standard.array(forKey: "burstStarts") as? [Double] ?? []
+                if bursts.contains(where: { abs($0 * 1000 - Double(wk.startedAtMs)) < 120_000 }) { continue }   // heart-rate bursts aren't workouts
                 let name = wk.activity.lowercased()
                 let category = name.contains("walk") ? "walking" : name.contains("run") ? "running"
                     : (name.contains("cycl") || name.contains("bik")) ? "cycling" : "other"

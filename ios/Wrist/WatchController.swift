@@ -42,6 +42,8 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         var lastBattery = Date.distantPast
         var lastProfileCheck = Date.distantPast
         var scanModeSet = false
+        var burstStartedAt: Date?
+        var lastBurst = Date.distantPast
         var lastHrMs: Int64 = 0
         init(record: WatchRecord, service: WatchService, raw: RawLog) {
             self.record = record; self.service = service; self.raw = raw
@@ -233,8 +235,9 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
             do { try s.tick() } catch { AppLog.log("\(u.record.entity) tick error: \(error)") }
             for line in s.unhandledObjects() { AppLog.log("\(u.record.entity) unhandled: \(line)") }
             declareZone(u)
-            if !u.scanModeSet, (try? s.dropSleepFeatures()) != nil { u.scanModeSet = true }   // never worn in bed
+            if !u.scanModeSet, (try? s.dropSleepFeatures(keep: RemoteConfig.load()?.keep_features ?? [])) != nil { u.scanModeSet = true }   // never worn in bed
             runExperiments(u)
+            heartRateBurst(u)
         }
         if now.timeIntervalSince(u.lastResync) >= 60 {
             u.lastResync = now
@@ -295,12 +298,48 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         let d = UserDefaults.standard
         var done = Set(d.stringArray(forKey: "experimentsDone") ?? [])
         for e in list where e.watch == u.record.entity && !done.contains(e.id) {
-            guard let bytes = Data(hexString: e.hex) else { AppLog.log("experiment \(e.id): bad hex"); continue }
-            AppLog.log("experiment \(e.id) -> \(u.record.entity): \(e.hex)")
-            send(u.record.id, [bytes])
+            if let f = e.feature {
+                do {
+                    try u.service.setFeature(id: f, windowMinutes: e.window_minutes ?? 0)
+                    AppLog.log("experiment \(e.id) -> \(u.record.entity): feature \(f) window \(e.window_minutes ?? 0) min")
+                } catch { AppLog.log("experiment \(e.id) error: \(error)") }
+            } else if let hex = e.hex, let bytes = Data(hexString: hex) {
+                AppLog.log("experiment \(e.id) -> \(u.record.entity): \(hex)")
+                send(u.record.id, [bytes])
+            } else { AppLog.log("experiment \(e.id): nothing to send"); }
             done.insert(e.id)
         }
         d.set(Array(done), forKey: "experimentsDone")
+    }
+
+    /// While the watch is worn, run a short workout every so often for second-by-second heart rate.
+    /// Off unless config.json has hr_burst. The sessions are remembered so they never count as workouts.
+    private func heartRateBurst(_ u: Unit) {
+        let now = Date()
+        if let started = u.burstStartedAt {
+            guard let cfg = RemoteConfig.load()?.hr_burst,
+                  now.timeIntervalSince(started) < Double(cfg.length_minutes * 60) else {
+                do { try u.service.stopWorkout(); AppLog.log("\(u.record.entity) heart-rate burst stopped") }
+                catch { AppLog.log("\(u.record.entity) burst stop error: \(error)") }
+                u.burstStartedAt = nil
+                return
+            }
+            return
+        }
+        guard let cfg = RemoteConfig.load()?.hr_burst, cfg.watch == u.record.entity,
+              now.timeIntervalSince(u.lastBurst) >= Double(cfg.every_minutes * 60),
+              let snap = try? u.service.snapshot(), snap.activeWorkout == nil,
+              let hr = snap.latestHr, Int64(now.timeIntervalSince1970 * 1000) - hr.atMs < 20 * 60_000   // worn
+        else { return }
+        do {
+            try u.service.startWorkout(activity: 36)
+            u.burstStartedAt = now
+            u.lastBurst = now
+            var bursts = UserDefaults.standard.array(forKey: "burstStarts") as? [Double] ?? []
+            bursts.append(now.timeIntervalSince1970)
+            UserDefaults.standard.set(Array(bursts.suffix(500)), forKey: "burstStarts")
+            AppLog.log("\(u.record.entity) heart-rate burst started (\(cfg.length_minutes) min)")
+        } catch { AppLog.log("\(u.record.entity) burst start error: \(error)") }
     }
 
     private func declareZone(_ u: Unit) {
@@ -361,7 +400,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         Settings.allDayScan = on
         link.queue.async {
             for u in self.units.values where u.record.entity == "scanwatch" {
-                _ = on; try? u.service.dropSleepFeatures()
+                _ = on; try? u.service.dropSleepFeatures(keep: RemoteConfig.load()?.keep_features ?? [])
             }
         }
     }

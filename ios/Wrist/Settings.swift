@@ -96,7 +96,20 @@ struct RemoteConfig: Decodable {
     struct Experiment: Decodable {
         var id: String
         var watch: String
-        var hex: String
+        var hex: String?
+        /// Feature experiment instead of raw bytes: window_minutes < 0 off, 0 permanent, > 0 from now.
+        var feature: UInt16?
+        var window_minutes: Int32?
+    }
+    /// Feature ids the "never in bed" cleanup must leave alone (an experiment is using them).
+    var keep_features: [UInt16]?
+    /// Short workouts while worn, for a burst of second-by-second heart rate.
+    var hr_burst: HrBurst?
+
+    struct HrBurst: Decodable {
+        var watch: String
+        var every_minutes: Int
+        var length_minutes: Int
     }
 
     struct Profile: Decodable {
