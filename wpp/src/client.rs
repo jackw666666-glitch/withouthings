@@ -765,6 +765,19 @@ impl Client {
         std::mem::take(&mut self.streams.unpersisted).into_iter().collect()
     }
 
+    /// Ask the watch to start a measurement itself (1 = ECG, 3 = SpO2). Normally the watch starts
+    /// these from its own menu and tells the phone; whether it honours a phone's request is being tested.
+    pub fn request_measure(&mut self, category: i16, now: UnixMillis) -> Vec<Action> {
+        if self.link.measuring.is_some() || !self.answers_requests() {
+            return Vec::new();
+        }
+        let actions = vec![Action::Send(Frame::new(
+            Command::CMD_MEASURE_START,
+            vec![WppObject::MeasureCategory(MeasureCategory { value: category })],
+        ))];
+        self.noted(now, actions)
+    }
+
     /// Hand calibration, as Gadgetbridge drives it: start, any number of moves, stop.
     /// Hands: 0 = minutes, 1 = hours, 2 = activity dial.
     pub fn hands_calibration_start(&mut self, now: UnixMillis) -> Vec<Action> {

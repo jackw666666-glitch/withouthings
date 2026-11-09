@@ -123,6 +123,12 @@ impl WatchService {
         self.dispatch(actions)
     }
 
+    /// Ask the watch to start a measurement (1 = ECG, 3 = SpO2). Experimental.
+    pub fn request_measure(&self, category: i16) -> Result<(), WatchError> {
+        let actions = self.inner.lock().unwrap().client.request_measure(category, now());
+        self.dispatch(actions)
+    }
+
     pub fn hands_calibration_start(&self) -> Result<(), WatchError> {
         let actions = self.inner.lock().unwrap().client.hands_calibration_start(now());
         self.dispatch(actions)

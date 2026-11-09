@@ -280,6 +280,10 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         guard u.lastHrMs > 0, latest > u.lastHrMs, latest - u.lastHrMs >= 30 * 60_000 else { return }
         AppLog.log("\(u.record.entity) put on after \((latest - u.lastHrMs) / 60_000) min: live heart-rate reading")
         do { try u.service.requestLiveHr() } catch { AppLog.log("\(u.record.entity) live HR error: \(error)") }
+        if u.record.entity == "scanwatch" {
+            AppLog.log("scanwatch put on: asking for an SpO2 reading")
+            do { try u.service.requestMeasure(category: 3) } catch { AppLog.log("scanwatch SpO2 request error: \(error)") }
+        }
     }
 
     private func declareZone(_ u: Unit) {

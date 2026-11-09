@@ -50,7 +50,7 @@ enum Settings {
     }
 
     static var allDayScan: Bool {
-        get { d.bool(forKey: "allDayScan") }
+        get { d.object(forKey: "allDayScan") as? Bool ?? true }   // on unless turned off
         set { d.set(newValue, forKey: "allDayScan") }
     }
 
