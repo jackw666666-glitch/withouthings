@@ -79,6 +79,7 @@ final class WatchLink: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate 
         queue.async {
             self.wanted.insert(id)
             guard self.central.state == .poweredOn else { return }
+            if let s = self.sessions[id], s.ready { return }      // already linked
             let p = self.sessions[id]?.peripheral ?? self.discovered[id] ?? self.central.retrievePeripherals(withIdentifiers: [id]).first
             guard let p else { AppLog.log("ble: \(id) not found"); return }
             self.open(p)
@@ -127,7 +128,13 @@ final class WatchLink: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate 
         if scanning { startScan() }
         for id in wanted {
             if let s = sessions[id] {
-                if s.peripheral.state != .connected { central.connect(s.peripheral, options: nil) }
+                // A session iOS restored may already be connected with no channel yet: rediscover it,
+                // otherwise the link sits "connected" and never syncs.
+                if s.peripheral.state == .connected {
+                    if !s.ready { s.peripheral.delegate = self; s.peripheral.discoverServices(nil) }
+                } else {
+                    central.connect(s.peripheral, options: nil)
+                }
             } else if let p = central.retrievePeripherals(withIdentifiers: [id]).first {
                 open(p)
             }
