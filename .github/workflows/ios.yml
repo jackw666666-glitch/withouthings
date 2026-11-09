@@ -1,0 +1,31 @@
+name: iOS
+on:
+  push:
+    branches: [ios]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust core + Swift bindings
+        run: |
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          source "$HOME/.cargo/env"
+          ios/build_rust.sh
+      - name: Xcode project
+        run: |
+          brew install xcodegen
+          cd ios && xcodegen generate
+      - name: Build unsigned
+        run: |
+          cd ios
+          xcodebuild -project Wrist.xcodeproj -scheme Wrist -configuration Release -sdk iphoneos \
+            -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build | tail -50
+          mkdir -p Payload && cp -R build/Build/Products/Release-iphoneos/Wrist.app Payload/
+          zip -qry Wrist-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Wrist-unsigned
+          path: ios/Wrist-unsigned.ipa

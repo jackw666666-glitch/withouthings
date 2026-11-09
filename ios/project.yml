@@ -1,0 +1,29 @@
+name: Wrist
+options:
+  bundleIdPrefix: com.jdubz
+  deploymentTarget:
+    iOS: "17.0"
+targets:
+  Wrist:
+    type: application
+    platform: iOS
+    sources:
+      - path: Wrist
+      - path: Generated/wpp_ffi.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.jdubz.wrist
+        PRODUCT_NAME: Wrist
+        SWIFT_VERSION: "5.0"
+        SWIFT_OBJC_BRIDGING_HEADER: Generated/wpp_ffiFFI.h
+        LIBRARY_SEARCH_PATHS: $(PROJECT_DIR)/lib
+        OTHER_LDFLAGS: -lwpp_ffi
+        INFOPLIST_FILE: Wrist/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        ENABLE_BITCODE: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

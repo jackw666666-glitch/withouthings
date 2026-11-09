@@ -34,3 +34,9 @@ withings.apk
 healthmate-backup/
 
 *.bin
+ios/Generated/
+ios/lib/
+ios/build/
+ios/Payload/
+ios/*.ipa
+ios/Wrist.xcodeproj/
