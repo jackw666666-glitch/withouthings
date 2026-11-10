@@ -117,6 +117,18 @@ struct RemoteConfig: Decodable {
     var polls: [Poll]?
     /// Minutes between automatic debug dumps (default 5).
     var dump_minutes: UInt32?
+    /// Hands-free ECG sessions (see WatchController.ecgSession).
+    var ecg_session: EcgSession?
+
+    struct EcgSession: Decodable {
+        var seconds: Int?
+        var countdown: Int?
+        var still_minutes: Int?
+        var per_day: Int?
+        var from_hour: Int?
+        var to_hour: Int?
+        var gap_hours: Double?
+    }
 
     struct Poll: Decodable {
         var id: String
@@ -173,6 +185,7 @@ struct RemoteConfig: Decodable {
         if let m = remote.raw_mask { base.raw_mask = m }
         if let p = remote.polls { base.polls = p }
         if let m = remote.dump_minutes { base.dump_minutes = m }
+        if let e = remote.ecg_session { base.ecg_session = e }
         return base
     }
 
@@ -186,5 +199,6 @@ struct RemoteConfig: Decodable {
         var raw_mask: UInt32?
         var polls: [Poll]?
         var dump_minutes: UInt32?
+        var ecg_session: EcgSession?
     }
 }

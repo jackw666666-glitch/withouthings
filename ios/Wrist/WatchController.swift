@@ -53,6 +53,9 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         var flashRunning = false
         var lastBurst = Date.distantPast
         var lastHrMs: Int64 = 0
+        var stepsSeen: Int64 = -1
+        var stepsStillSince = Date()
+        var ecgSessionRunning = false
         var rawCaptureOn: Bool?
         init(record: WatchRecord, service: WatchService, raw: RawLog) {
             self.record = record; self.service = service; self.raw = raw
@@ -269,6 +272,8 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
             sendHeartRateLimits(u)
             rawCapture(u)
             runPolls(u)
+            trackStillness(u)
+            ecgSession(u, manual: false)
             if let m = RemoteConfig.load()?.dump_minutes { s.setDumpInterval(minutes: m) }
         }
         if now.timeIntervalSince(u.lastResync) >= 60 {
@@ -332,7 +337,9 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         for e in list where e.watch == u.record.entity && !done.contains(e.id) {
             if let action = e.action {
                 AppLog.log("experiment \(e.id) -> \(u.record.entity): \(action)")
-                if action == "debug_dump" {
+                if action == "ecg_session" {
+                    ecgSession(u, manual: true)
+                } else if action == "debug_dump" {
                     do { try u.service.startDebugDump() } catch { AppLog.log("debug dump error: \(error)") }
                 } else if action == "flash_read" {
                     readFlash(u)
@@ -450,6 +457,71 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         let a = RemoteConfig.load()?.alerts
         let limits = a?.hr_low != nil && a?.hr_high != nil
         service.setLocalAlerts(afibDay: true, afibNight: false, inactivity: a?.move_reminder ?? false, hrHigh: limits, hrLow: limits)
+    }
+
+    /// Sitting = worn and the step counter hasn't moved for a while.
+    private func trackStillness(_ u: Unit) {
+        guard let count = (try? u.service.snapshot())?.steps?.count else { return }
+        let c = Int64(count)
+        if c != u.stepsSeen { u.stepsSeen = c; u.stepsStillSince = Date() }
+    }
+
+    private func isSitting(_ u: Unit, stillMinutes: Int) -> Bool {
+        guard let snap = try? u.service.snapshot(), snap.activeWorkout == nil, u.burstStartedAt == nil,
+              let hr = snap.latestHr, Int64(Date().timeIntervalSince1970 * 1000) - hr.atMs < 30 * 60_000 else { return false }
+        return u.stepsSeen >= 0 && Date().timeIntervalSince(u.stepsStillSince) >= Double(stillMinutes) * 60
+    }
+
+    /// Hands-free ECG: long buzz ("finger on bezel"), a 5-step countdown with a short buzz each second,
+    /// then the watch's factory ECG test streams a live 300 Hz ECG. Only while sitting.
+    /// Config "ecg_session": {seconds, countdown, still_minutes, per_day, from_hour, to_hour, gap_hours}.
+    private func ecgSession(_ u: Unit, manual: Bool) {
+        guard u.record.entity == "scanwatch", !u.ecgSessionRunning, case .finished = u.service.progress() else { return }
+        let cfg = RemoteConfig.load()?.ecg_session
+        let seconds = cfg?.seconds ?? 15, countdown = cfg?.countdown ?? 5, still = cfg?.still_minutes ?? 10
+        let d = UserDefaults.standard
+        let now = Date()
+        if !manual {
+            let perDay = cfg?.per_day ?? 2
+            let hour = Calendar.current.component(.hour, from: now)
+            let day = ISO8601DateFormatter.string(from: now, timeZone: .current, formatOptions: [.withFullDate])
+            guard perDay > 0, hour >= (cfg?.from_hour ?? 9), hour < (cfg?.to_hour ?? 22),
+                  d.integer(forKey: "ecgSession-\(day)") < perDay,
+                  now.timeIntervalSince1970 - d.double(forKey: "ecgSessionLast") >= Double(cfg?.gap_hours ?? 3) * 3600
+            else { return }
+            guard isSitting(u, stillMinutes: still) else { return }
+            d.set(d.integer(forKey: "ecgSession-\(day)") + 1, forKey: "ecgSession-\(day)")
+        } else if !isSitting(u, stillMinutes: 0) {
+            AppLog.log("ecg session: not worn, skipped"); return
+        }
+        d.set(now.timeIntervalSince1970, forKey: "ecgSessionLast")
+        u.ecgSessionRunning = true
+        AppLog.log("ecg session: start (\(manual ? "manual" : "auto"), \(seconds) s)")
+        let q = link.queue
+        // Alerts go to this watch only (the Steel HR stays quiet).
+        let post: (String, String, NotificationCategory) -> UInt32 = { title, message, category in
+            _ = self.host
+            self.host.announceTo = u.record.id
+            let id = u.service.postNotification(appId: "com.jdubz.wrist", title: title, subtitle: "", message: message, category: category)
+            self.host.announceTo = nil
+            return id
+        }
+        let alert = post("ECG", "Finger on bezel", .incomingCall)
+        q.asyncAfter(deadline: .now() + 2.5) { u.service.dismissNotification(id: alert) }
+        for step in 0..<countdown {
+            q.asyncAfter(deadline: .now() + 3.5 + Double(step)) {
+                let n = post("\(countdown - step)", "", .other)
+                q.asyncAfter(deadline: .now() + 0.8) { u.service.dismissNotification(id: n) }
+            }
+        }
+        q.asyncAfter(deadline: .now() + 3.5 + Double(countdown)) {
+            let n = UInt32(seconds * 300)
+            var frame = Data([0x01, 0x09, 0x79, 0x00, 0x08, 0x02, 0x06, 0x00, 0x04])
+            frame.append(contentsOf: [UInt8(n >> 24 & 0xff), UInt8(n >> 16 & 0xff), UInt8(n >> 8 & 0xff), UInt8(n & 0xff)])
+            self.send(u.record.id, [frame])
+            AppLog.log("ecg session: recording \(seconds) s")
+            q.asyncAfter(deadline: .now() + Double(seconds) + 5) { u.ecgSessionRunning = false }
+        }
     }
 
     /// Recurring raw commands from the NUC (config "polls"): each sent every `every_minutes` while linked.
