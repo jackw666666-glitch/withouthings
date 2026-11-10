@@ -1,7 +1,10 @@
 use crate::objects::{DebugDumpAnchor, DebugDumpMask};
 use crate::{Command, Frame, WppObject};
 
-const DUMP_MASK: u32 = 0x2000_0003;
+/// Base dump bits (settings, log) + RAWDATA + raw recording: workout accelerometer and light sensor,
+/// workout activity, background PPG, PPG algorithm, ECG. CMD_DEBUG_SET also stores this as the recording
+/// mask, so a dump must carry the same bits or it switches recording off.
+const DUMP_MASK: u32 = 0x3A4A_0013;
 
 const FIRST_ANCHOR: u32 = 0;
 
