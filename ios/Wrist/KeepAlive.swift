@@ -57,6 +57,12 @@ final class CommandPoller {
     static let shared = CommandPoller()
     private var timer: Timer?
     private var last = ""
+    private var lastPoll = Date.distantPast
+
+    /// Also called from BLE-driven housekeeping: in the background iOS stops the timer but keeps waking us for the watch.
+    func pollIfDue() {
+        if Date().timeIntervalSince(lastPoll) >= 15 { poll() }
+    }
 
     func start() {
         timer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in self?.poll() }
@@ -64,6 +70,7 @@ final class CommandPoller {
     }
 
     func poll() {
+        lastPoll = Date()
         guard let s = RemoteConfig.loadBase()?.commands_url, let url = URL(string: s) else { return }
         var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
         req.httpMethod = "GET"

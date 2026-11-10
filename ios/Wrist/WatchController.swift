@@ -243,6 +243,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
     }
 
     private func housekeepingAll() {
+        DispatchQueue.main.async { CommandPoller.shared.pollIfDue() }
         LiveUplink.flush()
         sendQueuedAlerts()
         for unit in units.values { housekeeping(unit) }
