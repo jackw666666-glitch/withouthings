@@ -456,7 +456,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         let worn = Int64(Date().timeIntervalSince1970 * 1000) - hr.atMs < 30 * 60_000
         if u.rawCaptureOn != worn { AppLog.log("scanwatch raw capture \(worn ? "on" : "off")") }
         u.rawCaptureOn = worn
-        do { try u.service.setRawCapture(on: worn) } catch { AppLog.log("raw capture error: \(error)") }
+        do { try u.service.setRawCapture(on: worn, mask: RemoteConfig.load()?.raw_mask) } catch { AppLog.log("raw capture error: \(error)") }
     }
 
     private func sendHeartRateLimits(_ u: Unit) {

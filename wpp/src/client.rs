@@ -811,11 +811,11 @@ impl Client {
     }
 
     /// Have the watch record raw sensor data, or stop. Safe to call often: only a change is sent.
-    pub fn set_raw_capture(&mut self, on: bool, now: UnixMillis) -> Vec<Action> {
+    pub fn set_raw_capture(&mut self, on: bool, mask: Option<u32>, now: UnixMillis) -> Vec<Action> {
         if !self.link_quiet() {
             return Vec::new();
         }
-        let actions = self.link.dump.set_raw_capture(on).into_iter().map(Action::Send).collect();
+        let actions = self.link.dump.set_raw_capture(on, mask).into_iter().map(Action::Send).collect();
         self.noted(now, actions)
     }
 

@@ -142,8 +142,8 @@ impl WatchService {
     }
 
     /// Record raw accelerometer and light-sensor data on the watch, or stop.
-    pub fn set_raw_capture(&self, on: bool) -> Result<(), WatchError> {
-        let actions = self.inner.lock().unwrap().client.set_raw_capture(on, now());
+    pub fn set_raw_capture(&self, on: bool, mask: Option<u32>) -> Result<(), WatchError> {
+        let actions = self.inner.lock().unwrap().client.set_raw_capture(on, mask, now());
         self.dispatch(actions)
     }
 
