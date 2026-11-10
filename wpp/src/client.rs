@@ -1124,7 +1124,13 @@ impl Client {
                 actions.push(Action::Store { token, records });
             }
         }
-        if self.link.dump.running() {
+        // Only dump traffic proves a dump round is alive (workout live data keeps flowing during bursts).
+        if self.link.dump.running()
+            && matches!(
+                frame.command.opcode(),
+                Command::CMD_DEBUG_DUMP | Command::CMD_DEBUG_DUMP_ACK | Command::CMD_DEBUG_SET
+            )
+        {
             self.link.dump_heard = Some(received_at);
         }
         actions.extend(self.link.dump.on_frame(&frame).into_iter().map(Action::Send));
