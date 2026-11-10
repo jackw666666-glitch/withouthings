@@ -370,6 +370,8 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         }
         guard let cfg = RemoteConfig.load()?.hr_burst, cfg.watch == u.record.entity,
               now.timeIntervalSince(u.lastBurst) >= Double(cfg.every_minutes * 60),
+              // The last burst is remembered across restarts, so an update doesn't start a new one.
+              now.timeIntervalSince1970 - ((UserDefaults.standard.array(forKey: "burstStarts") as? [Double])?.last ?? 0) >= Double(cfg.every_minutes * 60),
               let snap = try? u.service.snapshot(), snap.activeWorkout == nil,
               let hr = snap.latestHr, Int64(now.timeIntervalSince1970 * 1000) - hr.atMs < 20 * 60_000   // worn
         else { return }
