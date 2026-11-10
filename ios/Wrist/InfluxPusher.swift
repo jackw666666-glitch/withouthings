@@ -162,7 +162,7 @@ final class InfluxPusher {
         req.httpBody = lines.joined(separator: "\n").data(using: .utf8)
         req.timeoutInterval = 20
         busy = true
-        URLSession.shared.dataTask(with: req) { _, resp, err in
+        URLSession.shared.dataTask(with: req) { body, resp, err in
             self.busy = false
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
             if code == 204 {
@@ -170,7 +170,8 @@ final class InfluxPusher {
                 Settings.influxWatermarkMs = nowMs - 2 * 3_600_000
                 done("Influx: \(lines.count) points at \(Self.clock.string(from: Date()))")
             } else {
-                done("Influx: failed (\(code == 0 ? err?.localizedDescription ?? "offline" : "HTTP \(code)"))")
+                let why = body.flatMap { String(data: $0.prefix(300), encoding: .utf8) } ?? ""
+                done("Influx: failed (\(code == 0 ? err?.localizedDescription ?? "offline" : "HTTP \(code)")) \(why)")
             }
         }.resume()
     }

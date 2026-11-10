@@ -987,7 +987,7 @@ impl Store {
     ) -> Result<Vec<WorkoutRow>, Error> {
         let mut stmt = self.conn.prepare(
             "SELECT id, started_at, ended_at, subcategory FROM workout
-              WHERE device_id = ?1 AND started_at <= ?3
+              WHERE device_id = ?1 AND started_at > 0 AND started_at <= ?3
                 AND coalesce(ended_at, ?3) >= ?2
               ORDER BY started_at",
         )?;
