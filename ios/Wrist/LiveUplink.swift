@@ -18,14 +18,22 @@ enum LiveUplink {
         queue.async { add("wrist_live,src=app msg=\"\(escape(message))\"") }
     }
 
+    private static var remaining: [String: Int] = [:]
+
     static func frame(_ src: String, _ direction: UInt8, _ bytes: Data) {
         queue.async {
-            // A chunk that opens a frame names its command; continuation chunks follow the last one.
-            if bytes.count >= 5, bytes[bytes.startIndex] == 1 {
-                let cmd = (UInt16(bytes[bytes.startIndex + 1]) << 8 | UInt16(bytes[bytes.startIndex + 2])) & 0x3FFF
-                skipping[src] = bulk.contains(cmd)
+            // Frames: 01 | cmd BE16 | len BE16 | payload; a frame can span several BLE chunks.
+            let key = "\(src)-\(direction)"
+            if (remaining[key] ?? 0) > 0 {
+                remaining[key] = max(0, (remaining[key] ?? 0) - bytes.count)
+            } else if bytes.count >= 5, bytes[bytes.startIndex] == 1 {
+                let b = bytes.startIndex
+                let cmd = (UInt16(bytes[b + 1]) << 8 | UInt16(bytes[b + 2])) & 0x3FFF
+                let len = Int(UInt16(bytes[b + 3]) << 8 | UInt16(bytes[b + 4]))
+                skipping[key] = bulk.contains(cmd)
+                remaining[key] = max(0, 5 + len - bytes.count)
             }
-            guard skipping[src] != true else { return }
+            guard skipping[key] != true else { return }
             let hex = bytes.prefix(512).map { String(format: "%02x", $0) }.joined()
             add("wrist_live,src=\(src),dir=\(direction == 0 ? "rx" : "tx") hex=\"\(hex)\"")
         }

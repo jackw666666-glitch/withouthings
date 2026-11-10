@@ -269,6 +269,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
             sendHeartRateLimits(u)
             rawCapture(u)
             runPolls(u)
+            if let m = RemoteConfig.load()?.dump_minutes { s.setDumpInterval(minutes: m) }
         }
         if now.timeIntervalSince(u.lastResync) >= 60 {
             u.lastResync = now

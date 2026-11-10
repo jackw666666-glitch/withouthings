@@ -68,7 +68,7 @@ impl RateLimit {
 const MAX_BUSY_RETRIES: u32 = 20;
 const MIN_REFRESH_INTERVAL_MS: i64 = 300_000;
 const MIN_WALK_INTERVAL_MS: i64 = 900_000;
-const MIN_DUMP_INTERVAL_MS: i64 = 900_000;
+const MIN_DUMP_INTERVAL_MS: i64 = 300_000;
 const SILENCE_TIMEOUT_MS: i64 = 90_000;
 /// A history stream the watch never answers is skipped after this long. The watch keeps
 /// sending its once-a-minute sync request meanwhile, so the silence timeout never fires.
@@ -826,6 +826,11 @@ impl Client {
         }
         let actions = self.link.dump.set_raw_capture(on, mask).into_iter().map(Action::Send).collect();
         self.noted(now, actions)
+    }
+
+    /// How often the automatic debug dump (which carries the raw sensor records) may run.
+    pub fn set_dump_interval(&mut self, minutes: u32) {
+        self.dumps.interval_ms = i64::from(minutes.max(1)) * 60_000;
     }
 
     /// Ask for the watch's debug dump now (settings database, its log, raw data). It lands in the raw log.

@@ -115,6 +115,8 @@ struct RemoteConfig: Decodable {
     var raw_mask: UInt32?
     /// Raw commands repeated on a schedule.
     var polls: [Poll]?
+    /// Minutes between automatic debug dumps (default 5).
+    var dump_minutes: UInt32?
 
     struct Poll: Decodable {
         var id: String
@@ -170,6 +172,7 @@ struct RemoteConfig: Decodable {
         if let a = remote.alerts { base.alerts = a }
         if let m = remote.raw_mask { base.raw_mask = m }
         if let p = remote.polls { base.polls = p }
+        if let m = remote.dump_minutes { base.dump_minutes = m }
         return base
     }
 
@@ -182,5 +185,6 @@ struct RemoteConfig: Decodable {
         var alerts: Alerts?
         var raw_mask: UInt32?
         var polls: [Poll]?
+        var dump_minutes: UInt32?
     }
 }

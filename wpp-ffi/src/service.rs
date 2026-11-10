@@ -147,6 +147,11 @@ impl WatchService {
         self.dispatch(actions)
     }
 
+    /// Minutes between automatic debug dumps (raw sensor records ride on them).
+    pub fn set_dump_interval(&self, minutes: u32) {
+        self.inner.lock().unwrap().client.set_dump_interval(minutes);
+    }
+
     /// Ask the watch for its debug dump now.
     pub fn start_debug_dump(&self) -> Result<(), WatchError> {
         let actions = self.inner.lock().unwrap().client.start_debug_dump(now());
