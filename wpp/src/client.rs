@@ -624,6 +624,7 @@ struct Link {
     fetching_ecg: bool,
     signals: SignalCollector,
     dump: DebugDump,
+    dump_heard: Option<UnixMillis>,
     spi_flash: SpiFlash,
 }
 
@@ -640,6 +641,7 @@ impl Link {
             fetching_ecg: false,
             signals: SignalCollector::new(),
             dump: DebugDump::new(),
+            dump_heard: None,
             spi_flash: SpiFlash::new(),
         }
     }
@@ -821,6 +823,7 @@ impl Client {
 
     /// Have the watch record raw sensor data, or stop. Safe to call often: only a change is sent.
     pub fn set_raw_capture(&mut self, on: bool, mask: Option<u32>, now: UnixMillis) -> Vec<Action> {
+        self.unstick_dump(now);
         if !self.link_quiet() {
             return Vec::new();
         }
@@ -835,10 +838,12 @@ impl Client {
 
     /// Ask for the watch's debug dump now (settings database, its log, raw data). It lands in the raw log.
     pub fn start_debug_dump(&mut self, now: UnixMillis) -> Vec<Action> {
+        self.unstick_dump(now);
         if !self.link_quiet() {
             return Vec::new();
         }
         self.dumps.last = Some(now);
+        self.link.dump_heard = Some(now);
         let actions = self.link.dump.start().into_iter().map(Action::Send).collect();
         self.noted(now, actions)
     }
@@ -867,7 +872,17 @@ impl Client {
         self.walk_now(now)
     }
 
+    /// A dump round with no frame for 2 minutes is dead: drop it so dumps can run again.
+    fn unstick_dump(&mut self, now: UnixMillis) {
+        if self.link.dump.running()
+            && self.link.dump_heard.map_or(true, |heard| now.0 - heard.0 > 120_000)
+        {
+            self.link.dump.reset();
+        }
+    }
+
     fn drain_dump(&mut self, now: UnixMillis) -> Vec<Action> {
+        self.unstick_dump(now);
         if self.link.state != State::Finished
             || self.link.measuring.is_some()
             || self.link.dump.running()
@@ -877,6 +892,7 @@ impl Client {
             return Vec::new();
         }
         self.dumps.last = Some(now);
+        self.link.dump_heard = Some(now);
         self.link.dump.start().into_iter().map(Action::Send).collect()
     }
 
@@ -980,6 +996,7 @@ impl Client {
     }
 
     fn on_tick(&mut self, now: UnixMillis) -> Vec<Action> {
+        self.unstick_dump(now);
         if let State::Walking(stream) = self.link.state {
             // Only while the watch is still talking (its sync pings): a fully silent watch is
             // the silence timeout's job below, which reconnects instead.
@@ -1098,6 +1115,9 @@ impl Client {
                 }
                 actions.push(Action::Store { token, records });
             }
+        }
+        if self.link.dump.running() {
+            self.link.dump_heard = Some(received_at);
         }
         actions.extend(self.link.dump.on_frame(&frame).into_iter().map(Action::Send));
         self.link.spi_flash.on_frame(&frame);

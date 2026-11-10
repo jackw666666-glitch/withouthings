@@ -36,6 +36,11 @@ impl DebugDump {
         self.state != State::Idle
     }
 
+    /// Give up on a round the watch stopped answering (a lost reply would otherwise block every dump).
+    pub fn reset(&mut self) {
+        self.state = State::Idle;
+    }
+
     /// Record raw sensor data or not; `mask` picks which sensors (None = the default set).
     /// Sends the mask once per change; a running dump picks it up itself.
     pub fn set_raw_capture(&mut self, on: bool, mask: Option<u32>) -> Vec<Frame> {
