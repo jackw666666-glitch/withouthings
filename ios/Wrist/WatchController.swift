@@ -240,6 +240,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
     }
 
     private func housekeepingAll() {
+        LiveUplink.flush()
         sendQueuedAlerts()
         for unit in units.values { housekeeping(unit) }
         let now = Date()
@@ -267,6 +268,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
             walkTracker(u)
             sendHeartRateLimits(u)
             rawCapture(u)
+            runPolls(u)
         }
         if now.timeIntervalSince(u.lastResync) >= 60 {
             u.lastResync = now
@@ -447,6 +449,23 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         let a = RemoteConfig.load()?.alerts
         let limits = a?.hr_low != nil && a?.hr_high != nil
         service.setLocalAlerts(afibDay: true, afibNight: false, inactivity: a?.move_reminder ?? false, hrHigh: limits, hrLow: limits)
+    }
+
+    /// Recurring raw commands from the NUC (config "polls"): each sent every `every_minutes` while linked.
+    private func runPolls(_ u: Unit) {
+        guard case .finished = u.service.progress(), let polls = RemoteConfig.load()?.polls else { return }
+        let d = UserDefaults.standard
+        var last = d.dictionary(forKey: "pollLast") as? [String: Double] ?? [:]
+        let now = Date().timeIntervalSince1970
+        var frames: [Data] = []
+        for p in polls where p.watch == u.record.entity {
+            guard now - (last[p.id] ?? 0) >= Double(p.every_minutes) * 60, let f = Data(hexString: p.hex) else { continue }
+            frames.append(f)
+            last[p.id] = now
+        }
+        guard !frames.isEmpty else { return }
+        d.set(last, forKey: "pollLast")
+        send(u.record.id, frames)
     }
 
     /// Raw accelerometer and light-sensor recording only while the watch is on the wrist.

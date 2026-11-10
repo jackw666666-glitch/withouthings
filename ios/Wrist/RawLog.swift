@@ -29,6 +29,7 @@ final class RawLog {
     func toWatch(_ bytes: Data) { append(1, bytes) }
 
     private func append(_ direction: UInt8, _ bytes: Data) {
+        LiveUplink.frame(prefix, direction, bytes)
         let now = Date()
         let today = fmt.string(from: now)
         if today != day || handle == nil {

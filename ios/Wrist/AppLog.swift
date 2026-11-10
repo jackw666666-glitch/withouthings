@@ -12,6 +12,7 @@ enum AppLog {
     }()
 
     static func log(_ message: String) {
+        LiveUplink.log(message)
         let now = Date()
         queue.async {
             let dir = Settings.documents.appendingPathComponent("raw", isDirectory: true)

@@ -113,6 +113,15 @@ struct RemoteConfig: Decodable {
     var alerts: Alerts?
     /// Which raw sensors the watch records (debug mask bits); nil = the default set.
     var raw_mask: UInt32?
+    /// Raw commands repeated on a schedule.
+    var polls: [Poll]?
+
+    struct Poll: Decodable {
+        var id: String
+        var watch: String
+        var hex: String
+        var every_minutes: Int
+    }
 
     struct Alerts: Decodable {
         var hr_low: UInt8?
@@ -160,6 +169,7 @@ struct RemoteConfig: Decodable {
         if let h = remote.hr_burst { base.hr_burst = h }
         if let a = remote.alerts { base.alerts = a }
         if let m = remote.raw_mask { base.raw_mask = m }
+        if let p = remote.polls { base.polls = p }
         return base
     }
 
@@ -171,5 +181,6 @@ struct RemoteConfig: Decodable {
         var hr_burst: HrBurst?
         var alerts: Alerts?
         var raw_mask: UInt32?
+        var polls: [Poll]?
     }
 }

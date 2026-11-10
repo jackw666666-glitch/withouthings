@@ -59,7 +59,7 @@ final class CommandPoller {
     private var last = ""
 
     func start() {
-        timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in self?.poll() }
+        timer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in self?.poll() }
         poll()
     }
 
