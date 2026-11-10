@@ -53,6 +53,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         var flashRunning = false
         var lastBurst = Date.distantPast
         var lastHrMs: Int64 = 0
+        var rawCaptureOn: Bool?
         init(record: WatchRecord, service: WatchService, raw: RawLog) {
             self.record = record; self.service = service; self.raw = raw
         }
@@ -265,6 +266,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
             promptForTests(u)
             walkTracker(u)
             sendHeartRateLimits(u)
+            rawCapture(u)
         }
         if now.timeIntervalSince(u.lastResync) >= 60 {
             u.lastResync = now
@@ -445,6 +447,16 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         let a = RemoteConfig.load()?.alerts
         let limits = a?.hr_low != nil && a?.hr_high != nil
         service.setLocalAlerts(afibDay: true, afibNight: false, inactivity: a?.move_reminder ?? false, hrHigh: limits, hrLow: limits)
+    }
+
+    /// Raw accelerometer and light-sensor recording only while the watch is on the wrist.
+    private func rawCapture(_ u: Unit) {
+        guard u.record.entity == "scanwatch", case .finished = u.service.progress(),
+              let hr = (try? u.service.snapshot())?.latestHr else { return }
+        let worn = Int64(Date().timeIntervalSince1970 * 1000) - hr.atMs < 30 * 60_000
+        if u.rawCaptureOn != worn { AppLog.log("scanwatch raw capture \(worn ? "on" : "off")") }
+        u.rawCaptureOn = worn
+        do { try u.service.setRawCapture(on: worn) } catch { AppLog.log("raw capture error: \(error)") }
     }
 
     private func sendHeartRateLimits(_ u: Unit) {

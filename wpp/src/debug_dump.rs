@@ -1,10 +1,12 @@
 use crate::objects::{DebugDumpAnchor, DebugDumpMask};
 use crate::{Command, Frame, WppObject};
 
-/// Base dump bits (settings, log) + RAWDATA + raw recording: workout accelerometer and light sensor,
-/// workout activity, background PPG, PPG algorithm, ECG. CMD_DEBUG_SET also stores this as the recording
-/// mask, so a dump must carry the same bits or it switches recording off.
-const DUMP_MASK: u32 = 0x3A4A_0013;
+/// Settings + log: what every dump asks for.
+const BASE_MASK: u32 = 0x2000_0003;
+/// RAWDATA + raw recording: workout accelerometer and light sensor, workout activity, background PPG,
+/// PPG algorithm, ECG. CMD_DEBUG_SET also stores the mask as what the watch records, so every dump
+/// has to carry these bits or it switches recording off.
+const RAW_CAPTURE_MASK: u32 = 0x1A4A_0010;
 
 const FIRST_ANCHOR: u32 = 0;
 
@@ -19,15 +21,35 @@ enum State {
 #[derive(Debug, Clone)]
 pub struct DebugDump {
     state: State,
+    raw_capture: bool,
+    applied: Option<bool>,
 }
 
 impl DebugDump {
     pub fn new() -> DebugDump {
-        DebugDump { state: State::Idle }
+        DebugDump { state: State::Idle, raw_capture: false, applied: None }
     }
 
     pub fn running(&self) -> bool {
         self.state != State::Idle
+    }
+
+    /// Record raw sensor data or not. Sends the mask once per change; a running dump picks it up itself.
+    pub fn set_raw_capture(&mut self, on: bool) -> Vec<Frame> {
+        self.raw_capture = on;
+        if self.running() || self.applied == Some(on) {
+            return Vec::new();
+        }
+        self.applied = Some(on);
+        vec![self.mask_frame()]
+    }
+
+    fn mask_frame(&self) -> Frame {
+        let mask = if self.raw_capture { BASE_MASK | RAW_CAPTURE_MASK } else { BASE_MASK };
+        Frame::new(
+            Command::CMD_DEBUG_SET,
+            vec![WppObject::DebugDumpMask(DebugDumpMask { mask })],
+        )
     }
 
     pub fn start(&mut self) -> Vec<Frame> {
@@ -89,10 +111,8 @@ impl DebugDump {
 
     fn select(&mut self, anchor: u32) -> Vec<Frame> {
         self.state = State::Selecting(anchor);
-        vec![Frame::new(
-            Command::CMD_DEBUG_SET,
-            vec![WppObject::DebugDumpMask(DebugDumpMask { mask: DUMP_MASK })],
-        )]
+        self.applied = Some(self.raw_capture);
+        vec![self.mask_frame()]
     }
 }
 
@@ -113,6 +133,26 @@ mod tests {
 
     fn sent(frames: &[Frame]) -> Vec<u16> {
         frames.iter().map(|f| f.command.opcode().0).collect()
+    }
+
+    fn mask_of(frames: &[Frame]) -> u32 {
+        match frames[0].objects[0] {
+            WppObject::DebugDumpMask(DebugDumpMask { mask }) => mask,
+            _ => panic!("not a mask"),
+        }
+    }
+
+    #[test]
+    fn raw_capture_is_sent_once_per_change_and_every_dump_keeps_it() {
+        let mut dump = DebugDump::new();
+        assert_eq!(mask_of(&dump.set_raw_capture(true)), 0x3A4A_0013);
+        assert!(dump.set_raw_capture(true).is_empty());
+        assert_eq!(mask_of(&dump.start()), 0x3A4A_0013);
+        let mut dump = DebugDump::new();
+        assert_eq!(mask_of(&dump.start()), 0x2000_0003);
+        let mut off = DebugDump::new();
+        off.set_raw_capture(true);
+        assert_eq!(mask_of(&off.set_raw_capture(false)), 0x2000_0003);
     }
 
     #[test]

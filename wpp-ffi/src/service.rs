@@ -141,6 +141,12 @@ impl WatchService {
         self.dispatch(actions)
     }
 
+    /// Record raw accelerometer and light-sensor data on the watch, or stop.
+    pub fn set_raw_capture(&self, on: bool) -> Result<(), WatchError> {
+        let actions = self.inner.lock().unwrap().client.set_raw_capture(on, now());
+        self.dispatch(actions)
+    }
+
     /// Ask the watch for its debug dump now.
     pub fn start_debug_dump(&self) -> Result<(), WatchError> {
         let actions = self.inner.lock().unwrap().client.start_debug_dump(now());

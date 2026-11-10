@@ -810,6 +810,15 @@ impl Client {
         ))])
     }
 
+    /// Have the watch record raw sensor data, or stop. Safe to call often: only a change is sent.
+    pub fn set_raw_capture(&mut self, on: bool, now: UnixMillis) -> Vec<Action> {
+        if !self.link_quiet() {
+            return Vec::new();
+        }
+        let actions = self.link.dump.set_raw_capture(on).into_iter().map(Action::Send).collect();
+        self.noted(now, actions)
+    }
+
     /// Ask for the watch's debug dump now (settings database, its log, raw data). It lands in the raw log.
     pub fn start_debug_dump(&mut self, now: UnixMillis) -> Vec<Action> {
         if !self.link_quiet() {
