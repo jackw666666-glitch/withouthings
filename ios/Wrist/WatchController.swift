@@ -350,6 +350,14 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
     /// Off unless config.json has hr_burst. The sessions are remembered so they never count as workouts.
     private func heartRateBurst(_ u: Unit) {
         let now = Date()
+        // A burst outlives the app (an update, a relaunch): pick it back up so it still gets stopped.
+        if u.burstStartedAt == nil, !u.autoWalk, let running = (try? u.service.snapshot())?.activeWorkout {
+            let bursts = UserDefaults.standard.array(forKey: "burstStarts") as? [Double] ?? []
+            if bursts.contains(where: { abs($0 * 1000 - Double(running.startedAtMs)) < 120_000 }) {
+                u.burstStartedAt = Date(timeIntervalSince1970: Double(running.startedAtMs) / 1000)
+                AppLog.log("\(u.record.entity) picked up a running burst")
+            }
+        }
         if let started = u.burstStartedAt {
             guard let cfg = RemoteConfig.load()?.hr_burst,
                   now.timeIntervalSince(started) < Double(cfg.length_minutes * 60) else {
@@ -453,6 +461,11 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         let snap = try? u.service.snapshot()
         let recording = snap?.activeWorkout != nil && u.burstStartedAt == nil
         KeepAlive.shared.setTracking(recording)
+        // A walk outlives the app too.
+        if !u.autoWalk, let running = snap?.activeWorkout,
+           abs(UserDefaults.standard.double(forKey: "autoWalkStart") * 1000 - Double(running.startedAtMs)) < 120_000 {
+            u.autoWalk = true
+        }
         guard now.timeIntervalSince(u.lastStepPoll) >= 120 else { return }
         u.lastStepPoll = now
         try? u.service.requestRefresh()
@@ -467,7 +480,11 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
             do { try u.service.stopWorkout(); AppLog.log("walk ended") } catch { AppLog.log("walk stop error: \(error)") }
             u.autoWalk = false
         } else if u.movingPolls >= 2, snap?.activeWorkout == nil, u.burstStartedAt == nil {
-            do { try u.service.startWorkout(activity: 1); u.autoWalk = true; AppLog.log("walk started") }
+            do {
+                try u.service.startWorkout(activity: 1); u.autoWalk = true
+                UserDefaults.standard.set(now.timeIntervalSince1970, forKey: "autoWalkStart")
+                AppLog.log("walk started")
+            }
             catch { AppLog.log("walk start error: \(error)") }
         }
     }

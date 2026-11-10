@@ -1098,7 +1098,7 @@ impl Store {
         self.conn
             .query_row(
                 "SELECT id, started_at, subcategory FROM workout
-                  WHERE device_id = ?1 AND ended_at IS NULL
+                  WHERE device_id = ?1 AND ended_at IS NULL AND started_at > 0
                   ORDER BY started_at DESC LIMIT 1",
                 params![device_id],
                 |r| {
