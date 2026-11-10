@@ -127,7 +127,10 @@ final class InfluxPusher {
         // Health readings the watch takes on its own (real UTC times; new series, nothing reads the old cloud ones).
         for w in watches {
             let e = w.entity
-            for (metric, name) in [(Metric.spo2, "watch_spo2"), (.hrvRmssd, "watch_hrv_rmssd"), (.respiratoryRate, "watch_resp_rate")] {
+            for (metric, name) in [(Metric.spo2, "watch_spo2"), (.hrvRmssd, "watch_hrv_rmssd"), (.hrvSdnn, "watch_hrv_sdnn"),
+                                  (.respiratoryRate, "watch_resp_rate"), (.temperature, "watch_core_temperature"),
+                                  (.watchTemperature, "watch_temperature"), (.pressure, "watch_pressure"),
+                                  (.light, "watch_light"), (.batteryMillivolts, "watch_battery_mv")] {
                 for p in ((try? w.service.series(metric: metric, fromMs: fromMs, toMs: nowMs, maxPoints: 100_000)) ?? []) {
                     lines.append("\(name),domain=sensor,entity_id=\(e) value=\(p.value) \(p.atMs / 1000)")
                 }

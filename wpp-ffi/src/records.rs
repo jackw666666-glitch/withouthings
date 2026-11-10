@@ -52,6 +52,10 @@ pub enum Metric {
     Ascent,
     Calories,
     Distance,
+    BatteryMillivolts,
+    WatchTemperature,
+    Pressure,
+    Light,
 }
 
 impl Metric {
@@ -68,6 +72,10 @@ impl Metric {
             Metric::Ascent => SampleKind::Ascent,
             Metric::Calories => SampleKind::Calories,
             Metric::Distance => SampleKind::Distance,
+            Metric::BatteryMillivolts => SampleKind::BatteryMillivolts,
+            Metric::WatchTemperature => SampleKind::WatchTemperature,
+            Metric::Pressure => SampleKind::Pressure,
+            Metric::Light => SampleKind::Light,
         }
     }
 

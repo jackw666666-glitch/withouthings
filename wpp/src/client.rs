@@ -406,13 +406,19 @@ pub enum SampleKind {
     Calories,
     Distance,
     TrackedDuration,
+    /// The watch's own sensor temperature (next to the skin while worn), milli-degrees C.
+    WatchTemperature,
+    /// Air pressure, milli-hPa.
+    Pressure,
+    /// Ambient light sensor, raw.
+    Light,
 }
 
 impl SampleKind {
     /// What a stored value is worth in the kind's own unit.
     pub fn reading(self, stored: i64) -> f64 {
         let scale = match self {
-            SampleKind::CoreTemperature => 1000.0,
+            SampleKind::CoreTemperature | SampleKind::WatchTemperature | SampleKind::Pressure => 1000.0,
             SampleKind::Ascent | SampleKind::Distance | SampleKind::Calories => 100.0,
             SampleKind::TrackedDuration => 3600.0,
             SampleKind::Spo2 => 10.0,
@@ -438,6 +444,9 @@ impl SampleKind {
             SampleKind::Calories => 13,
             SampleKind::Distance => 14,
             SampleKind::TrackedDuration => 15,
+            SampleKind::WatchTemperature => 16,
+            SampleKind::Pressure => 17,
+            SampleKind::Light => 18,
         }
     }
 
@@ -1387,6 +1396,13 @@ impl Client {
                 WppObject::Duration(duration) => {
                     records.push(Record::live_sample(received_at, SampleKind::TrackedDuration, duration.value as i64));
                 }
+                WppObject::PressureTemperature(pt) => {
+                    records.push(Record::live_sample(received_at, SampleKind::Pressure, pt.pressure as i64));
+                    records.push(Record::live_sample(received_at, SampleKind::WatchTemperature, pt.temperature as i64));
+                }
+                WppObject::LightSensorReply(light) => {
+                    records.push(Record::live_sample(received_at, SampleKind::Light, light.value as i64));
+                }
                 WppObject::BatteryStatus(battery) => {
                     records.push(Record::live_sample(received_at, SampleKind::BatteryPercent, battery.battery_percent as i64));
                     records.push(Record::live_sample(received_at, SampleKind::BatteryState, battery.battery_state as i64));
@@ -1924,6 +1940,8 @@ impl Client {
                 vec![WppObject::InfoType(InfoType { value: 4 })],
             )),
             Action::Send(Frame::new(Command::CMD_BATTERY_STATUS, Vec::new())),
+            Action::Send(Frame::new(Command::CMD_GET_PRESSURE_TEMPERATURE, Vec::new())),
+            Action::Send(Frame::new(Command::CMD_GET_LIGHT_SENSOR, Vec::new())),
         ])
     }
 
@@ -4708,6 +4726,8 @@ mod tests {
                 Command::CMD_STORED_MEASURE_SIGNAL_GET,
                 Command::CMD_DISPLAYED_INFO_GET,
                 Command::CMD_BATTERY_STATUS,
+                Command::CMD_GET_PRESSURE_TEMPERATURE,
+                Command::CMD_GET_LIGHT_SENSOR,
             ]
         );
 

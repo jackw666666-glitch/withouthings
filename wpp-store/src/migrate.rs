@@ -20,6 +20,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/0014_note.sql"),
     include_str!("migrations/0015_drop_workout_sample.sql"),
     include_str!("migrations/0016_undecoded_command_optional.sql"),
+    include_str!("migrations/0017_environment_samples.sql"),
 ];
 
 pub fn run(conn: &Connection) -> Result<(), Error> {
