@@ -1,8 +1,9 @@
 use crate::objects::{DebugDumpAnchor, DebugDumpMask};
 use crate::{Command, Frame, WppObject};
 
-/// Settings + log: what every dump asks for.
-const BASE_MASK: u32 = 0x2000_0003;
+/// Settings + log + RAWDATA (send stored raw records): what every dump asks for, so a backlog keeps
+/// draining while the watch is off the wrist. The sensor bits that record come from the raw mask.
+const BASE_MASK: u32 = 0x2000_0013;
 /// RAWDATA + raw recording: workout accelerometer and light sensor, workout activity, background PPG,
 /// PPG algorithm, ECG. CMD_DEBUG_SET also stores the mask as what the watch records, so every dump
 /// has to carry these bits or it switches recording off.
@@ -157,11 +158,11 @@ mod tests {
         assert!(dump.set_raw_capture(true, None).is_empty());
         assert_eq!(mask_of(&dump.start()), 0x3A4A_0013);
         let mut dump = DebugDump::new();
-        assert_eq!(mask_of(&dump.start()), 0x2000_0003);
+        assert_eq!(mask_of(&dump.start()), 0x2000_0013);
         let mut off = DebugDump::new();
         off.set_raw_capture(true, None);
-        assert_eq!(mask_of(&off.set_raw_capture(true, Some(0x10))), 0x2000_0013);
-        assert_eq!(mask_of(&off.set_raw_capture(false, None)), 0x2000_0003);
+        assert_eq!(mask_of(&off.set_raw_capture(true, Some(0x1_0000))), 0x2001_0013);
+        assert_eq!(mask_of(&off.set_raw_capture(false, None)), 0x2000_0013);
     }
 
     #[test]
