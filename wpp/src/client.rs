@@ -622,6 +622,7 @@ struct Link {
     /// An ECG asked for by name when its measurement stopped. It runs alongside
     /// whatever the state is doing.
     fetching_ecg: bool,
+    ecg_fetch_since: Option<UnixMillis>,
     signals: SignalCollector,
     dump: DebugDump,
     dump_heard: Option<UnixMillis>,
@@ -639,6 +640,7 @@ impl Link {
             walk_since: None,
             measuring: None,
             fetching_ecg: false,
+            ecg_fetch_since: None,
             signals: SignalCollector::new(),
             dump: DebugDump::new(),
             dump_heard: None,
@@ -997,6 +999,12 @@ impl Client {
 
     fn on_tick(&mut self, now: UnixMillis) -> Vec<Action> {
         self.unstick_dump(now);
+        // A factory ECG test ends with a MEASURE_STOP naming a store that holds nothing: don't wait forever.
+        if self.link.fetching_ecg
+            && self.link.ecg_fetch_since.map_or(true, |since| now.0 - since.0 > 120_000)
+        {
+            self.link.fetching_ecg = false;
+        }
         if let State::Walking(stream) = self.link.state {
             // Only while the watch is still talking (its sync pings): a fully silent watch is
             // the silence timeout's job below, which reconnects instead.
@@ -1188,6 +1196,7 @@ impl Client {
                     // Named by its StoredMeasureMeta alone, the handler reads
                     // the ECG store.
                     self.link.fetching_ecg = true;
+                    self.link.ecg_fetch_since = Some(received_at);
                     actions.push(Action::Send(Frame::new(
                         Command::CMD_STORED_MEASURE_SIGNAL_GET,
                         vec![WppObject::StoredMeasureMeta(measure)],
