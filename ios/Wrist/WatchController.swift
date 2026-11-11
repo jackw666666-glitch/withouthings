@@ -2,6 +2,7 @@ import BackgroundTasks
 import CoreLocation
 import Foundation
 import SwiftUI
+import UIKit
 
 /// Glue between the Bluetooth link and the Rust protocol core (withouthings' wpp-ffi), for every paired watch.
 /// All core calls happen on the BLE queue so frames, ticks and store writes stay in order.
@@ -405,7 +406,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         let d = UserDefaults.standard
         var done = Set(d.stringArray(forKey: "alertsDone") ?? [])
         for n in list where !done.contains(n.id) {
-            notify(title: n.title, message: n.message)
+            notify(title: n.title, message: n.message, icon: n.icon)
             done.insert(n.id)
         }
         d.set(Array(done.suffix(1000)), forKey: "alertsDone")
@@ -692,12 +693,20 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
     }
 
     /// An alert to every watch listening, through Wrist's own Bluetooth alert service.
-    func notify(title: String, message: String, only watch: UUID? = nil) {
+    func notify(title: String, message: String, icon: String? = nil, only watch: UUID? = nil) {
         link.queue.async {
             _ = self.host
             guard let u = self.ancsUnit else { return }
+            // A picture alert posts under its own app id ("img.<hash of the URL>"): the watch has never seen that app,
+            // asks the phone for its icon, and WatchRasterizer draws the downloaded picture.
+            var appId = "com.jdubz.wrist"
+            if let icon, let url = URL(string: icon), let data = try? Data(contentsOf: url), let image = UIImage(data: data) {
+                let hash = icon.utf8.reduce(UInt32(5381)) { ($0 << 5) &+ $0 &+ UInt32($1) }   // stable per URL
+                appId = "img." + String(hash, radix: 36)
+                WatchRasterizer.pictures[appId] = image
+            }
             self.host.announceTo = watch
-            let id = u.service.postNotification(appId: "com.jdubz.wrist", title: title, subtitle: "", message: message, category: .other)
+            let id = u.service.postNotification(appId: appId, title: title, subtitle: "", message: message, category: .other)
             self.host.announceTo = nil
             AppLog.log("alert \(id) posted; \(self.host.listeners) watch(es) listening")
         }

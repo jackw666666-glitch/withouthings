@@ -149,6 +149,8 @@ struct RemoteConfig: Decodable {
         var id: String
         var title: String
         var message: String
+        /// Optional picture (PNG URL, white-on-transparent works best) shown as the alert's icon on the watch.
+        var icon: String?
     }
 
     struct HrBurst: Decodable {

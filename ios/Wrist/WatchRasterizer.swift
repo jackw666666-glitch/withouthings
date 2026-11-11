@@ -19,7 +19,18 @@ final class WatchRasterizer: Rasterizer {
         }
     }
 
+    /// Pictures for picture alerts, by their app id (filled by WatchController.notify before posting).
+    static var pictures: [String: UIImage] = [:]
+
     func icon(appId: String, width: UInt8, height: UInt8) -> Bitmap {
+        if let picture = Self.pictures[appId] {
+            AppLog.log("picture icon \(appId) \(width)x\(height)")
+            return draw(Int(width), Int(height)) { size in
+                let ratio = min(size.width / picture.size.width, size.height / picture.size.height)
+                let fit = CGSize(width: picture.size.width * ratio, height: picture.size.height * ratio)
+                picture.draw(in: CGRect(x: (size.width - fit.width) / 2, y: (size.height - fit.height) / 2, width: fit.width, height: fit.height))
+            }
+        }
         guard let name = Self.appSymbols[appId] ?? Self.appSymbols.first(where: { appId.hasPrefix($0.key) })?.value
         else { return empty() }   // unknown app: the watch shows its default bell
         return symbol(name, Int(width), Int(height))
