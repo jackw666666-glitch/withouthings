@@ -23,6 +23,7 @@ final class WatchRasterizer: Rasterizer {
     static var pictures: [String: UIImage] = [:]
 
     func icon(appId: String, width: UInt8, height: UInt8) -> Bitmap {
+        AppLog.log("alerts: watch asked icon for \(appId) \(width)x\(height)")
         if let picture = Self.pictures[appId] {
             AppLog.log("picture icon \(appId) \(width)x\(height)")
             return draw(Int(width), Int(height)) { size in
