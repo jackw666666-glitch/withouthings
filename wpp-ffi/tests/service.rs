@@ -202,6 +202,7 @@ fn a_notification_is_announced_then_served_when_the_watch_asks() {
         String::new(),
         "Hello".into(),
         NotificationCategory::Social,
+    false,
     );
 
     let announced = recorder.announced.lock().unwrap().clone();
@@ -257,6 +258,7 @@ fn a_long_message_is_split_across_data_source_fragments() {
         String::new(),
         "x".repeat(100),
         NotificationCategory::Other,
+    false,
     );
     let mut write = vec![0x00];
     write.extend_from_slice(&id.to_le_bytes());

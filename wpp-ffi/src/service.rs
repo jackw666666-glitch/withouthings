@@ -1112,13 +1112,15 @@ impl WatchService {
         subtitle: String,
         message: String,
         category: NotificationCategory,
+        silent: bool,
     ) -> u32 {
-        let (id, announcement) = self.notifications.lock().unwrap().post(
+        let (id, announcement) = self.notifications.lock().unwrap().post_with(
             app_id,
             title,
             subtitle,
             message,
             category.into(),
+            silent,
         );
         self.ancs.announce(announcement.to_vec());
         id.0

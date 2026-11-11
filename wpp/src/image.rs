@@ -1,5 +1,5 @@
 use crate::frame::Channel;
-use crate::objects::{GlyphId, ImageData, ImageMetadata, NotificationAppId, Null, WppObject};
+use crate::objects::{GlyphId, ImageData, ImageMetadata, NotificationAppId, NotificationAppInfo, Null, WppObject};
 use crate::{Command, Frame};
 
 const LUMA_THRESHOLD: f64 = 115.2;
@@ -256,6 +256,9 @@ impl IconRequest {
             .into_iter()
             .map(|id| WppObject::NotificationAppId(NotificationAppId { id: id.to_string() }))
             .collect();
+        // The app's display info rides along with the icon: once the watch's notification-icon cache is cleared
+        // (CACHE_INVALIDATE type 1) it has no display info left and silently drops the app's alerts (11/11).
+        objects.push(WppObject::NotificationAppInfo(NotificationAppInfo { name: display_name(&self.app_id), category: 0 }));
         objects.push(WppObject::ImageMetadata(icon.metadata()));
         objects.extend(icon.chunks());
         objects.push(WppObject::Null(Null {}));
@@ -263,6 +266,13 @@ impl IconRequest {
             Command::CMD_NOTIFICATION_GET.with_channel(Channel::SlaveRequest),
             objects,
         )
+    }
+}
+
+fn display_name(app_id: &str) -> String {
+    match app_id {
+        "com.jdubz.wrist" => "Wrist".to_string(),
+        other => other.rsplit('.').next().unwrap_or(other).chars().take(20).collect(),
     }
 }
 

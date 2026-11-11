@@ -4,6 +4,8 @@ pub const CONTROL_POINT_UUID: &str = "10000058-5749-5448-0037-000000000000";
 pub const DATA_SOURCE_UUID: &str = "1000005a-5749-5448-0037-000000000000";
 
 const EVENT_FLAGS: u8 = 0x02;
+/// ANCS EventFlagSilent: the watch shows the alert without vibrating (11/11, Jack: light up with no buzz).
+const EVENT_FLAGS_SILENT: u8 = 0x01;
 
 const GET_NOTIFICATION_ATTRIBUTES: u8 = 0x00;
 
@@ -42,6 +44,7 @@ pub struct Notification {
     pub subtitle: String,
     pub message: String,
     pub category: Category,
+    pub silent: bool,
 }
 
 impl Notification {
@@ -202,7 +205,7 @@ pub fn announcement(kind: EventKind, notification: &Notification) -> [u8; 8] {
     let id = notification.id.0.to_le_bytes();
     [
         kind as u8,
-        EVENT_FLAGS,
+        if notification.silent { EVENT_FLAGS_SILENT } else { EVENT_FLAGS },
         notification.category as u8,
         count,
         id[0],
@@ -239,6 +242,18 @@ impl NotificationCenter {
         message: String,
         category: Category,
     ) -> (NotificationId, [u8; 8]) {
+        self.post_with(app_id, title, subtitle, message, category, false)
+    }
+
+    pub fn post_with(
+        &mut self,
+        app_id: String,
+        title: String,
+        subtitle: String,
+        message: String,
+        category: Category,
+        silent: bool,
+    ) -> (NotificationId, [u8; 8]) {
         let id = NotificationId(self.next_id);
         self.next_id += 1;
         let notification = Notification {
@@ -248,6 +263,7 @@ impl NotificationCenter {
             subtitle,
             message,
             category,
+            silent,
         };
         let announcement = announcement(EventKind::Added, &notification);
         self.live.push(notification);
@@ -281,6 +297,7 @@ mod tests {
             subtitle: "Sub".into(),
             message: "Message".into(),
             category: Category::Social,
+            silent: false,
         }
     }
 

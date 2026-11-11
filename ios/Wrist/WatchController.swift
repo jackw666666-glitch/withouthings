@@ -406,7 +406,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         let d = UserDefaults.standard
         var done = Set(d.stringArray(forKey: "alertsDone") ?? [])
         for n in list where !done.contains(n.id) {
-            notify(title: n.title, message: n.message, icon: n.icon)
+            notify(title: n.title, message: n.message, icon: n.icon, silent: n.silent ?? false)
             done.insert(n.id)
         }
         d.set(Array(done.suffix(1000)), forKey: "alertsDone")
@@ -510,7 +510,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         let post: (String, String, NotificationCategory) -> UInt32 = { title, message, category in
             _ = self.host
             self.host.announceTo = u.record.id
-            let id = u.service.postNotification(appId: "com.jdubz.wrist", title: title, subtitle: "", message: message, category: category)
+            let id = u.service.postNotification(appId: "com.jdubz.wrist", title: title, subtitle: "", message: message, category: category, silent: false)
             self.host.announceTo = nil
             return id
         }
@@ -695,7 +695,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
     }
 
     /// An alert to every watch listening, through Wrist's own Bluetooth alert service.
-    func notify(title: String, message: String, icon: String? = nil, only watch: UUID? = nil) {
+    func notify(title: String, message: String, icon: String? = nil, silent: Bool = false, only watch: UUID? = nil) {
         link.queue.async {
             _ = self.host
             guard let u = self.ancsUnit else { return }
@@ -710,7 +710,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
                 if let frame = Data(hexString: "01096a0005096800010" + "1") { self.send(u.record.id, [frame]) }
             }
             self.host.announceTo = watch
-            let id = u.service.postNotification(appId: appId, title: title, subtitle: "", message: message, category: .other)
+            let id = u.service.postNotification(appId: appId, title: title, subtitle: "", message: message, category: .other, silent: silent)
             self.host.announceTo = nil
             AppLog.log("alert \(id) posted; \(self.host.listeners) watch(es) listening")
         }

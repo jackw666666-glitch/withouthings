@@ -152,6 +152,8 @@ struct RemoteConfig: Decodable {
         var message: String
         /// Optional picture (PNG URL, white-on-transparent works best) shown as the alert's icon on the watch.
         var icon: String?
+        /// true = ANCS silent flag: shown without vibrating.
+        var silent: Bool?
     }
 
     struct HrBurst: Decodable {
