@@ -444,9 +444,11 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
             guard tries < 2, now.timeIntervalSince1970 - last >= 4 * 3600, let frame = Data(hexString: t.shortcut) else { continue }
             send(u.record.id, [frame])
             notify(title: "Wrist", message: "Hold crown: \(t.label)", only: u.record.id)
-            if t.name != "ecg", let ecg = Data(hexString: "010989000509a1000101") {
-                // Put the crown back on ECG once the prompted test has had its chance.
-                link.queue.asyncAfter(deadline: .now() + 15 * 60) { self.send(u.record.id, [ecg]) }
+            // Put the crown back on Jack's chosen long-press action (config crown_home, default 8 = Do Not Disturb,
+            // 11/11) once the prompted test has had its chance.
+            let home = RemoteConfig.load()?.crown_home ?? 8
+            if let back = Data(hexString: String(format: "010989000509a10001%02x", home)) {
+                link.queue.asyncAfter(deadline: .now() + 15 * 60) { self.send(u.record.id, [back]) }
             }
             d.set(tries + 1, forKey: "prompt-\(day)-\(t.name)")
             d.set(now.timeIntervalSince1970, forKey: "prompt-\(day)-\(t.name)-last")
