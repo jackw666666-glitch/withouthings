@@ -45,7 +45,12 @@ final class AncsHost: NSObject, CBPeripheralManagerDelegate {
 
     private func drain() {
         while let (c, bytes, to) = pending.first {
-            guard manager.updateValue(bytes, for: c, onSubscribedCentrals: to) else { return }   // resumes when ready
+            let target = to.map { $0.map { String($0.identifier.uuidString.prefix(8)) }.joined(separator: ",") } ?? "all"
+            guard manager.updateValue(bytes, for: c, onSubscribedCentrals: to) else {
+                AppLog.log("alerts: send to \(target) waiting (\(pending.count) queued)")
+                return   // resumes when ready
+            }
+            AppLog.log("alerts: sent \(bytes.count) B on \(c.uuid.uuidString.prefix(8)) to \(target)")
             pending.removeFirst()
         }
     }
@@ -82,6 +87,7 @@ final class AncsHost: NSObject, CBPeripheralManagerDelegate {
     func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveWrite requests: [CBATTRequest]) {
         for r in requests where r.characteristic.uuid == control.uuid {
             guard let value = r.value else { continue }
+            AppLog.log("alerts: watch \(r.central.identifier.uuidString.prefix(8)) asked \(value.map { String(format: "%02x", $0) }.joined())")
             requester = r.central
             onControlWrite?(value, r.central.maximumUpdateValueLength)
         }
