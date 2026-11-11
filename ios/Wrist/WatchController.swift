@@ -697,13 +697,15 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         link.queue.async {
             _ = self.host
             guard let u = self.ancsUnit else { return }
-            // A picture alert posts under its own app id ("img.<hash of the URL>"): the watch has never seen that app,
-            // asks the phone for its icon, and WatchRasterizer draws the downloaded picture.
-            var appId = "com.jdubz.wrist"
-            if let icon, let url = URL(string: icon), let data = try? Data(contentsOf: url), let image = UIImage(data: data) {
-                let hash = icon.utf8.reduce(UInt32(5381)) { ($0 << 5) &+ $0 &+ UInt32($1) }   // stable per URL
-                appId = "img." + String(hash, radix: 36)
-                WatchRasterizer.pictures[appId] = image
+            // Picture alerts (0.8.10): the watch only shows apps it has enabled, so a new app id was received but never
+            // displayed (0.8.9). Keep Wrist's own id and clear the watch's notification-icon cache (CACHE_INVALIDATE 2410,
+            // type 1) so it asks for Wrist's icon again; WatchRasterizer answers with this alert's picture.
+            let appId = "com.jdubz.wrist"
+            var picture: UIImage? = nil
+            if let icon, let url = URL(string: icon), let data = try? Data(contentsOf: url) { picture = UIImage(data: data) }
+            if picture != nil || WatchRasterizer.pictures[appId] != nil {
+                WatchRasterizer.pictures[appId] = picture
+                if let frame = Data(hexString: "01096a0005096800010" + "1") { self.send(u.record.id, [frame]) }
             }
             self.host.announceTo = watch
             let id = u.service.postNotification(appId: appId, title: title, subtitle: "", message: message, category: .other)
