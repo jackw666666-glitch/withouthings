@@ -1981,7 +1981,6 @@ impl Client {
             )),
             Action::Send(Frame::new(Command::CMD_BATTERY_STATUS, Vec::new())),
             Action::Send(Frame::new(Command::CMD_GET_PRESSURE_TEMPERATURE, Vec::new())),
-            Action::Send(Frame::new(Command::CMD_GET_LIGHT_SENSOR, Vec::new())),
         ])
     }
 
@@ -4767,7 +4766,6 @@ mod tests {
                 Command::CMD_DISPLAYED_INFO_GET,
                 Command::CMD_BATTERY_STATUS,
                 Command::CMD_GET_PRESSURE_TEMPERATURE,
-                Command::CMD_GET_LIGHT_SENSOR,
             ]
         );
 

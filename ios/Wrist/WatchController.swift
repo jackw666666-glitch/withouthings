@@ -443,6 +443,10 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
             guard tries < 2, now.timeIntervalSince1970 - last >= 4 * 3600, let frame = Data(hexString: t.shortcut) else { continue }
             send(u.record.id, [frame])
             notify(title: "Wrist", message: "Hold crown: \(t.label)", only: u.record.id)
+            if t.name != "ecg", let ecg = Data(hexString: "010989000509a1000101") {
+                // Put the crown back on ECG once the prompted test has had its chance.
+                link.queue.asyncAfter(deadline: .now() + 15 * 60) { self.send(u.record.id, [ecg]) }
+            }
             d.set(tries + 1, forKey: "prompt-\(day)-\(t.name)")
             d.set(now.timeIntervalSince1970, forKey: "prompt-\(day)-\(t.name)-last")
             d.set(total + 1, forKey: "prompt-\(day)-total")
@@ -507,7 +511,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
             self.host.announceTo = nil
             return id
         }
-        let alert = post("ECG", "Finger on bezel", .incomingCall)
+        let alert = post("ECG", "", .other)
         q.asyncAfter(deadline: .now() + 2.5) { u.service.dismissNotification(id: alert) }
         for step in 0..<countdown {
             q.asyncAfter(deadline: .now() + 3.5 + Double(step)) {
@@ -584,11 +588,14 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         else if delta < 30 { u.stillPolls += 1; u.movingPolls = 0 }
         if u.autoWalk {
             guard u.stillPolls >= 2 else { return }
+            try? u.service.setFeature(id: 54, windowMinutes: -1); try? u.service.setFeature(id: 55, windowMinutes: -1)
             do { try u.service.stopWorkout(); AppLog.log("walk ended") } catch { AppLog.log("walk stop error: \(error)") }
             u.autoWalk = false
         } else if u.movingPolls >= 2, snap?.activeWorkout == nil, u.burstStartedAt == nil {
             do {
                 try u.service.startWorkout(activity: 1); u.autoWalk = true
+                // Raw PPG + accelerometer for the whole walk (the firmware only records 1 walk in 8 itself).
+                try? u.service.setFeature(id: 54, windowMinutes: 20); try? u.service.setFeature(id: 55, windowMinutes: 20)
                 UserDefaults.standard.set(now.timeIntervalSince1970, forKey: "autoWalkStart")
                 AppLog.log("walk started")
             }

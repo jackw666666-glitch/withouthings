@@ -118,6 +118,13 @@ impl Progress {
 }
 
 #[derive(uniffi::Record, Debug, Clone, PartialEq)]
+pub struct Spo2Check {
+    pub at_ms: i64,
+    pub percent: Option<f64>,
+    pub heart_rate: Option<i64>,
+}
+
+#[derive(uniffi::Record, Debug, Clone, PartialEq)]
 pub struct HrPoint {
     pub at_ms: i64,
     pub bpm: u16,

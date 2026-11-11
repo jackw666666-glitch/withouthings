@@ -140,6 +140,11 @@ final class InfluxPusher {
                 let isAfib = a.rhythm == .afib ? 1 : 0
                 lines.append("watch_afib,domain=sensor,entity_id=\(e),rhythm=\(rhythm) value=\(isAfib)i,alerted=\(a.alerted == true) \(a.measuredAtMs / 1000)")
             }
+            for c in ((try? w.service.spo2Checks()) ?? []) where c.atMs >= fromMs {
+                guard let pct = c.percent else { continue }
+                let hr = c.heartRate.map { ",heart_rate=\($0)i" } ?? ""
+                lines.append("watch_spo2_check,domain=sensor,entity_id=\(e) value=\(pct)\(hr) \(c.atMs / 1000)")
+            }
             for g in ((try? w.service.ecgs()) ?? []) where g.measuredAtMs >= fromMs {
                 let rhythm = g.rhythm.map { "\($0)" } ?? "none"
                 lines.append("watch_ecg,domain=sensor,entity_id=\(e),rhythm=\(rhythm) heart_rate=\(g.heartRate ?? 0)i \(g.measuredAtMs / 1000)")

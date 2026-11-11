@@ -204,6 +204,19 @@ impl WatchService {
     }
 
     /// When the newest oxygen spot check was taken (ms), if there is one.
+    /// Every crown oxygen check on this watch.
+    pub fn spo2_checks(&self) -> Result<Vec<crate::records::Spo2Check>, WatchError> {
+        let rows = self.store.lock().unwrap().spo2_checks(self.device_id)?;
+        Ok(rows
+            .into_iter()
+            .map(|(at, percent, heart_rate)| crate::records::Spo2Check {
+                at_ms: if at < 100_000_000_000 { at * 1000 } else { at },
+                percent,
+                heart_rate,
+            })
+            .collect())
+    }
+
     pub fn latest_spo2_check_ms(&self) -> Result<Option<i64>, WatchError> {
         let at = self.store.lock().unwrap().latest_spo2_check(self.device_id)?;
         Ok(at.map(|t| if t < 100_000_000_000 { t * 1000 } else { t }))

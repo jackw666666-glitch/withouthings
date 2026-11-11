@@ -1400,6 +1400,25 @@ impl Store {
         )?)
     }
 
+    /// Crown oxygen checks: (measured_at, SpO2 percent, heart rate) from spo2_check_measure (types 54 and 89).
+    pub fn spo2_checks(&self, device_id: DeviceId) -> Result<Vec<(i64, Option<f64>, Option<i64>)>, Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT c.measured_at,
+                    (SELECT m.value FROM spo2_check_measure m WHERE m.parent_id = c.id AND m.type = 54),
+                    (SELECT m.exponent FROM spo2_check_measure m WHERE m.parent_id = c.id AND m.type = 54),
+                    (SELECT m.value FROM spo2_check_measure m WHERE m.parent_id = c.id AND m.type = 89)
+               FROM spo2_check c WHERE c.device_id = ?1 ORDER BY c.measured_at",
+        )?;
+        // No SQL power(): SQLite builds without math functions lack it.
+        let rows = stmt.query_map(params![device_id], |r| {
+            let value: Option<i64> = r.get(1)?;
+            let exponent: Option<i64> = r.get(2)?;
+            let pct = value.map(|v| v as f64 * 10f64.powi(exponent.unwrap_or(0) as i32));
+            Ok((r.get(0)?, pct, r.get(3)?))
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
     pub fn ecg_measures(&self, ecg_id: EcgId) -> Result<Vec<EcgMeasure>, Error> {
         let mut stmt = self
             .conn
