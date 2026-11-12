@@ -107,6 +107,8 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         CommandPoller.shared.onChange = { [weak self] in
             self?.link.queue.async {
                 guard let self else { return }
+                LiveUplink.liveRaw = RemoteConfig.load()?.live_raw ?? false
+                if let m = RemoteConfig.load()?.dump_minutes { for u in self.units.values { u.service.setDumpInterval(minutes: m) } }
                 for u in self.units.values { self.runExperiments(u) }
                 LiveUplink.flush()
             }
@@ -259,6 +261,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
     }
 
     private func housekeepingAll() {
+        LiveUplink.liveRaw = RemoteConfig.load()?.live_raw ?? false
         DispatchQueue.main.async { CommandPoller.shared.pollIfDue() }
         LiveUplink.flush()
         sendQueuedAlerts()

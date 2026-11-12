@@ -119,6 +119,7 @@ struct RemoteConfig: Decodable {
     var polls: [Poll]?
     /// Minutes between automatic debug dumps (default 5).
     var dump_minutes: UInt32?
+    var live_raw: Bool?
     var crown_home: Int?
     /// Hands-free ECG sessions (see WatchController.ecgSession).
     var ecg_session: EcgSession?
@@ -192,6 +193,7 @@ struct RemoteConfig: Decodable {
         if let m = remote.raw_mask { base.raw_mask = m }
         if let p = remote.polls { base.polls = p }
         if let m = remote.dump_minutes { base.dump_minutes = m }
+        if let v = remote.live_raw { base.live_raw = v }
         if let c = remote.crown_home { base.crown_home = c }
         if let e = remote.ecg_session { base.ecg_session = e }
         return base
@@ -207,6 +209,7 @@ struct RemoteConfig: Decodable {
         var raw_mask: UInt32?
         var polls: [Poll]?
         var dump_minutes: UInt32?
+        var live_raw: Bool?
         /// Crown long-press action the app returns to after a test prompt (1 ECG, 2 SpO2, ... 8 Do Not Disturb).
         var crown_home: Int?
         var ecg_session: EcgSession?

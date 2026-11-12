@@ -21,6 +21,11 @@ enum LiveUplink {
     }
 
     private static var remaining: [String: Int] = [:]
+    private static var cmdOf: [String: UInt16] = [:]
+    /// X session (NUC config live_raw, 11/12): also ship the watch's debug-dump frames (the raw sensor records) as
+    /// whole BLE chunks, measurement wrist_dump, flushed the moment a dump frame completes -- the NUC rebuilds the
+    /// .wpp stream from them instead of waiting for a phone pull.
+    static var liveRaw = false
 
     static func frame(_ src: String, _ direction: UInt8, _ bytes: Data) {
         queue.async {
@@ -33,9 +38,16 @@ enum LiveUplink {
                 let cmd = (UInt16(bytes[b + 1]) << 8 | UInt16(bytes[b + 2])) & 0x3FFF
                 let len = Int(UInt16(bytes[b + 3]) << 8 | UInt16(bytes[b + 4]))
                 skipping[key] = bulk.contains(cmd)
+                cmdOf[key] = cmd
                 remaining[key] = max(0, 5 + len - bytes.count)
             }
-            guard skipping[key] != true else { return }
+            if skipping[key] == true {
+                guard liveRaw, direction == 0, cmdOf[key] == 280 else { return }
+                let hex = bytes.map { String(format: "%02x", $0) }.joined()
+                add("wrist_dump,src=\(src) hex=\"\(hex)\"")
+                if (remaining[key] ?? 0) == 0 { fastUntil = Date().addingTimeInterval(20); flushNow() }
+                return
+            }
             let hex = bytes.prefix(512).map { String(format: "%02x", $0) }.joined()
             add("wrist_live,src=\(src),dir=\(direction == 0 ? "rx" : "tx") hex=\"\(hex)\"")
         }
@@ -55,7 +67,12 @@ enum LiveUplink {
 
     /// Send what's buffered; called every 15 s from housekeeping.
     static func flush() {
-        queue.async {
+        queue.async { flushNow() }
+    }
+
+    /// flush() body, on `queue` already.
+    private static func flushNow() {
+        do {
             guard !busy, !lines.isEmpty, Date().timeIntervalSince(lastFlush) >= (Date() < fastUntil ? 1.5 : 10),
                   let cfg = RemoteConfig.loadBase(),
                   var comps = URLComponents(string: cfg.influx_url + "/api/v2/write") else { return }
@@ -76,6 +93,7 @@ enum LiveUplink {
                     busy = false
                     let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
                     if code == 204 || code == 400 || code == 422 { lines.removeFirst(min(batch.count, lines.count)) }
+                    if liveRaw, !lines.isEmpty { queue.asyncAfter(deadline: .now() + 1.5) { flushNow() } }   // keep the dump moving
                 }
             }.resume()
         }
