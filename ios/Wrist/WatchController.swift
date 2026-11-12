@@ -517,11 +517,18 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
             guard isSitting(u, stillMinutes: still) else { return }
             d.set(d.integer(forKey: "ecgSession-\(day)") + 1, forKey: "ecgSession-\(day)")
         } else if !isSitting(u, stillMinutes: 0) {
-            // Asked for on purpose (X entrance): run it anyway, the watch's stale heart rate or a burst isn't a
-            // reason to refuse. Log why it looked unworn so the gate can be checked.
+            // Asked for on purpose (X entrance): run it anyway. A running workout (a burst, an auto walk, a stale one)
+            // blocks the factory ECG, so stop it first; X starts its own session workout after the ECG.
             let snap = try? u.service.snapshot()
             let age = snap?.latestHr.map { (Int64(Date().timeIntervalSince1970 * 1000) - $0.atMs) / 60_000 }
             AppLog.log("ecg session: looked unworn (hr age \(age.map(String.init) ?? "none") min, workout \(snap?.activeWorkout != nil), burst \(u.burstStartedAt != nil)); running anyway")
+            if snap?.activeWorkout != nil || u.burstStartedAt != nil || u.autoWalk {
+                if u.autoWalk { try? u.service.setFeature(id: 54, windowMinutes: -1); try? u.service.setFeature(id: 55, windowMinutes: -1) }
+                do { try u.service.stopWorkout(); AppLog.log("ecg session: stopped the running workout first") }
+                catch { AppLog.log("ecg session: workout stop error: \(error)") }
+                u.burstStartedAt = nil
+                u.autoWalk = false
+            }
         }
         d.set(now.timeIntervalSince1970, forKey: "ecgSessionLast")
         u.ecgSessionRunning = true
