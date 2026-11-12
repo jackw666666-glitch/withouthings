@@ -517,7 +517,11 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
             guard isSitting(u, stillMinutes: still) else { return }
             d.set(d.integer(forKey: "ecgSession-\(day)") + 1, forKey: "ecgSession-\(day)")
         } else if !isSitting(u, stillMinutes: 0) {
-            AppLog.log("ecg session: not worn, skipped"); return
+            // Asked for on purpose (X entrance): run it anyway, the watch's stale heart rate or a burst isn't a
+            // reason to refuse. Log why it looked unworn so the gate can be checked.
+            let snap = try? u.service.snapshot()
+            let age = snap?.latestHr.map { (Int64(Date().timeIntervalSince1970 * 1000) - $0.atMs) / 60_000 }
+            AppLog.log("ecg session: looked unworn (hr age \(age.map(String.init) ?? "none") min, workout \(snap?.activeWorkout != nil), burst \(u.burstStartedAt != nil)); running anyway")
         }
         d.set(now.timeIntervalSince1970, forKey: "ecgSessionLast")
         u.ecgSessionRunning = true
