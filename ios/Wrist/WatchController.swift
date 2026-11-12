@@ -345,6 +345,23 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
                     do { try u.service.startDebugDump() } catch { AppLog.log("debug dump error: \(error)") }
                 } else if action == "flash_read" {
                     readFlash(u)
+                } else if action == "workout_start" {
+                    // The NUC's X session (kodi_load): a workout for second-by-second heart rate + raw PPG for the
+                    // whole session. Not a burst or a walk, so neither of those stops it; workout_stop does.
+                    if (try? u.service.snapshot())?.activeWorkout != nil {
+                        AppLog.log("workout_start: a workout is already running")
+                    } else {
+                        do {
+                            try u.service.startWorkout(activity: e.activity ?? 36)
+                            try? u.service.setFeature(id: 54, windowMinutes: 240); try? u.service.setFeature(id: 55, windowMinutes: 240)
+                            AppLog.log("workout_start: started (activity \(e.activity ?? 36))")
+                        } catch { AppLog.log("workout_start error: \(error)") }
+                    }
+                } else if action == "workout_stop" {
+                    try? u.service.setFeature(id: 54, windowMinutes: -1); try? u.service.setFeature(id: 55, windowMinutes: -1)
+                    do { try u.service.stopWorkout(); AppLog.log("workout_stop: stopped") }
+                    catch { AppLog.log("workout_stop error: \(error)") }
+                    u.autoWalk = false
                 }
             } else if let f = e.feature {
                 do {

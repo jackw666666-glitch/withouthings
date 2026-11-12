@@ -102,6 +102,8 @@ struct RemoteConfig: Decodable {
         /// Feature experiment instead of raw bytes: window_minutes < 0 off, 0 permanent, > 0 from now.
         var feature: UInt16?
         var window_minutes: Int32?
+        /// workout_start: the watch activity id (default 36).
+        var activity: UInt32?
     }
     /// Feature ids the "never in bed" cleanup must leave alone (an experiment is using them).
     var keep_features: [UInt16]?
