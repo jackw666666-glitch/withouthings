@@ -12,6 +12,8 @@ enum LiveUplink {
     private static var skipping: [String: Bool] = [:]
     private static var lastFlush = Date.distantPast
     private static var busy = false
+    /// Until then flush every ~1.5 s (an ECG the TV is drawing live), not every 10 s.
+    static var fastUntil = Date.distantPast
     private static let bulk: Set<UInt16> = [280, 2386, 2424, 1286, 2344, 327]
 
     static func log(_ message: String) {
@@ -54,7 +56,7 @@ enum LiveUplink {
     /// Send what's buffered; called every 15 s from housekeeping.
     static func flush() {
         queue.async {
-            guard !busy, !lines.isEmpty, Date().timeIntervalSince(lastFlush) >= 10,
+            guard !busy, !lines.isEmpty, Date().timeIntervalSince(lastFlush) >= (Date() < fastUntil ? 1.5 : 10),
                   let cfg = RemoteConfig.loadBase(),
                   var comps = URLComponents(string: cfg.influx_url + "/api/v2/write") else { return }
             comps.queryItems = [.init(name: "org", value: cfg.influx_org), .init(name: "bucket", value: cfg.influx_bucket),

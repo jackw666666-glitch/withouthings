@@ -104,6 +104,13 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         timer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
             self?.link.queue.async { self?.housekeepingAll() }
         }
+        CommandPoller.shared.onChange = { [weak self] in
+            self?.link.queue.async {
+                guard let self else { return }
+                for u in self.units.values { self.runExperiments(u) }
+                LiveUplink.flush()
+            }
+        }
     }
 
     // MARK: scheduled background refresh
@@ -541,6 +548,11 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         d.set(now.timeIntervalSince1970, forKey: "ecgSessionLast")
         u.ecgSessionRunning = true
         AppLog.log("ecg session: start (\(manual ? "manual" : "auto"), \(seconds) s)")
+        // The X entrance draws the trace live: ship frames every ~1.5 s until the recording is over.
+        let fastFor = 3.5 + Double(countdown) + Double(seconds) + 10
+        LiveUplink.fastUntil = now.addingTimeInterval(fastFor)
+        LiveUplink.flush()
+        for t in stride(from: 1.5, through: fastFor, by: 1.5) { link.queue.asyncAfter(deadline: .now() + t) { LiveUplink.flush() } }
         let q = link.queue
         // Alerts go to this watch only (the Steel HR stays quiet).
         let post: (String, String, NotificationCategory) -> UInt32 = { title, message, category in

@@ -51,21 +51,23 @@ final class KeepAlive: NSObject, CLLocationManagerDelegate {
     }
 }
 
-/// Every minute while running, fetch the NUC's command file (commands_url in config.json) and save it as
+/// Every 3 s while running (X waits on these), fetch the NUC's command file (commands_url in config.json) and save it as
 /// Documents/remote.json, which RemoteConfig merges in. Commands then reach the watch within a minute.
 final class CommandPoller {
     static let shared = CommandPoller()
     private var timer: Timer?
     private var last = ""
     private var lastPoll = Date.distantPast
+    /// Called (on any thread) when the command file changed, so new experiments run at once, not on the next tick.
+    var onChange: (() -> Void)?
 
     /// Also called from BLE-driven housekeeping: in the background iOS stops the timer but keeps waking us for the watch.
     func pollIfDue() {
-        if Date().timeIntervalSince(lastPoll) >= 15 { poll() }
+        if Date().timeIntervalSince(lastPoll) >= 3 { poll() }
     }
 
     func start() {
-        timer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in self?.poll() }
+        timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.poll() }
         poll()
     }
 
@@ -82,6 +84,7 @@ final class CommandPoller {
             self.last = text
             try? data.write(to: Settings.documents.appendingPathComponent("remote.json"))
             AppLog.log("commands updated from NUC (\(data.count) bytes)")
+            self.onChange?()
         }.resume()
     }
 }
