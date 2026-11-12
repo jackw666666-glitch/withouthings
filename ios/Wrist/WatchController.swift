@@ -6,6 +6,14 @@ import UIKit
 
 /// Glue between the Bluetooth link and the Rust protocol core (withouthings' wpp-ffi), for every paired watch.
 /// All core calls happen on the BLE queue so frames, ticks and store writes stay in order.
+
+/// The store's open workout, unless it is stale: a workout whose end never reached the store (11/11's bursts stayed
+/// "running" for a day and blocked the X entrance ECG, the session workout and the bursts). Nothing here runs > 6 h.
+func liveWorkout(_ w: WorkoutSummary?) -> WorkoutSummary? {
+    guard let w, Date().timeIntervalSince1970 * 1000 - Double(w.startedAtMs) < 6 * 3_600_000 else { return nil }
+    return w
+}
+
 final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
     static let shared = WatchController()
 
@@ -141,7 +149,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
                               speedMmS: loc.speed >= 0 ? Int32(loc.speed * 1000) : nil,
                               bearingCdeg: loc.course >= 0 ? Int32(loc.course * 100) : nil)
         link.queue.async {
-            for u in self.units.values where u.burstStartedAt == nil && (try? u.service.snapshot())?.activeWorkout != nil {
+            for u in self.units.values where u.burstStartedAt == nil && liveWorkout((try? u.service.snapshot())?.activeWorkout) != nil {
                 try? u.service.recordFixes(fixes: [fix])
             }
         }
@@ -348,7 +356,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
                 } else if action == "workout_start" {
                     // The NUC's X session (kodi_load): a workout for second-by-second heart rate + raw PPG for the
                     // whole session. Not a burst or a walk, so neither of those stops it; workout_stop does.
-                    if (try? u.service.snapshot())?.activeWorkout != nil {
+                    if liveWorkout((try? u.service.snapshot())?.activeWorkout) != nil {
                         AppLog.log("workout_start: a workout is already running")
                     } else {
                         do {
@@ -382,7 +390,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
     private func heartRateBurst(_ u: Unit) {
         let now = Date()
         // A burst outlives the app (an update, a relaunch): pick it back up so it still gets stopped.
-        if u.burstStartedAt == nil, !u.autoWalk, let running = (try? u.service.snapshot())?.activeWorkout {
+        if u.burstStartedAt == nil, !u.autoWalk, let running = liveWorkout((try? u.service.snapshot())?.activeWorkout) {
             let bursts = UserDefaults.standard.array(forKey: "burstStarts") as? [Double] ?? []
             if bursts.contains(where: { abs($0 * 1000 - Double(running.startedAtMs)) < 120_000 }) {
                 u.burstStartedAt = Date(timeIntervalSince1970: Double(running.startedAtMs) / 1000)
@@ -403,7 +411,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
               now.timeIntervalSince(u.lastBurst) >= Double(cfg.every_minutes * 60),
               // The last burst is remembered across restarts, so an update doesn't start a new one.
               now.timeIntervalSince1970 - ((UserDefaults.standard.array(forKey: "burstStarts") as? [Double])?.last ?? 0) >= Double(cfg.every_minutes * 60),
-              let snap = try? u.service.snapshot(), snap.activeWorkout == nil,
+              let snap = try? u.service.snapshot(), liveWorkout(snap.activeWorkout) == nil,
               let hr = snap.latestHr, Int64(now.timeIntervalSince1970 * 1000) - hr.atMs < 20 * 60_000   // worn
         else { return }
         do {
@@ -439,7 +447,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         guard hour >= 9, hour < 22 else { return }
         let nowMs = Int64(now.timeIntervalSince1970 * 1000)
         let dayStart = Int64(cal.startOfDay(for: now).timeIntervalSince1970 * 1000)
-        guard let snap = try? u.service.snapshot(), snap.activeWorkout == nil, !snap.measuring,
+        guard let snap = try? u.service.snapshot(), liveWorkout(snap.activeWorkout) == nil, !snap.measuring,
               let hr = snap.latestHr, nowMs - hr.atMs < 30 * 60_000 else { return }          // on the wrist
         let recent = (try? u.service.activityWindows(fromMs: nowMs - 15 * 60_000, toMs: nowMs)) ?? []
         guard recent.reduce(0, { $0 + $1.steps }) < 20 else { return }                       // sitting still
@@ -492,7 +500,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
     }
 
     private func isSitting(_ u: Unit, stillMinutes: Int) -> Bool {
-        guard let snap = try? u.service.snapshot(), snap.activeWorkout == nil, u.burstStartedAt == nil,
+        guard let snap = try? u.service.snapshot(), liveWorkout(snap.activeWorkout) == nil, u.burstStartedAt == nil,
               let hr = snap.latestHr, Int64(Date().timeIntervalSince1970 * 1000) - hr.atMs < 30 * 60_000 else { return false }
         return u.stepsSeen >= 0 && Date().timeIntervalSince(u.stepsStillSince) >= Double(stillMinutes) * 60
     }
@@ -517,12 +525,12 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
             guard isSitting(u, stillMinutes: still) else { return }
             d.set(d.integer(forKey: "ecgSession-\(day)") + 1, forKey: "ecgSession-\(day)")
         } else if !isSitting(u, stillMinutes: 0) {
-            // Asked for on purpose (X entrance): run it anyway. A running workout (a burst, an auto walk, a stale one)
+            // Asked for on purpose (X entrance): run it anyway. A live workout (a burst, an auto walk)
             // blocks the factory ECG, so stop it first; X starts its own session workout after the ECG.
             let snap = try? u.service.snapshot()
             let age = snap?.latestHr.map { (Int64(Date().timeIntervalSince1970 * 1000) - $0.atMs) / 60_000 }
-            AppLog.log("ecg session: looked unworn (hr age \(age.map(String.init) ?? "none") min, workout \(snap?.activeWorkout != nil), burst \(u.burstStartedAt != nil)); running anyway")
-            if snap?.activeWorkout != nil || u.burstStartedAt != nil || u.autoWalk {
+            AppLog.log("ecg session: looked unworn (hr age \(age.map(String.init) ?? "none") min, workout \(liveWorkout(snap?.activeWorkout) != nil ? "live" : snap?.activeWorkout != nil ? "stale" : "none"), burst \(u.burstStartedAt != nil)); running anyway")
+            if liveWorkout(snap?.activeWorkout) != nil || u.burstStartedAt != nil || u.autoWalk {
                 if u.autoWalk { try? u.service.setFeature(id: 54, windowMinutes: -1); try? u.service.setFeature(id: 55, windowMinutes: -1) }
                 do { try u.service.stopWorkout(); AppLog.log("ecg session: stopped the running workout first") }
                 catch { AppLog.log("ecg session: workout stop error: \(error)") }
@@ -601,10 +609,10 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         guard u.record.entity == "scanwatch", case .finished = u.service.progress() else { return }
         let now = Date()
         let snap = try? u.service.snapshot()
-        let recording = snap?.activeWorkout != nil && u.burstStartedAt == nil
+        let recording = liveWorkout(snap?.activeWorkout) != nil && u.burstStartedAt == nil
         KeepAlive.shared.setTracking(recording)
         // A walk outlives the app too.
-        if !u.autoWalk, let running = snap?.activeWorkout,
+        if !u.autoWalk, let running = liveWorkout(snap?.activeWorkout),
            abs(UserDefaults.standard.double(forKey: "autoWalkStart") * 1000 - Double(running.startedAtMs)) < 120_000 {
             u.autoWalk = true
         }
@@ -622,7 +630,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
             try? u.service.setFeature(id: 54, windowMinutes: -1); try? u.service.setFeature(id: 55, windowMinutes: -1)
             do { try u.service.stopWorkout(); AppLog.log("walk ended") } catch { AppLog.log("walk stop error: \(error)") }
             u.autoWalk = false
-        } else if u.movingPolls >= 2, snap?.activeWorkout == nil, u.burstStartedAt == nil {
+        } else if u.movingPolls >= 2, liveWorkout(snap?.activeWorkout) == nil, u.burstStartedAt == nil {
             do {
                 try u.service.startWorkout(activity: 1); u.autoWalk = true
                 // Raw PPG + accelerometer for the whole walk (the firmware only records 1 walk in 8 itself).
