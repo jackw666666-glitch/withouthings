@@ -545,6 +545,11 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
                 u.autoWalk = false
             }
         }
+        if manual {
+            // Raw mode (features 54/55, the watch's "Research mode") locks the screen to the time: the countdown
+            // would buzz unseen and the ECG record noise (11/12 12:03). Off first; the X session turns it back on.
+            try? u.service.setFeature(id: 54, windowMinutes: -1); try? u.service.setFeature(id: 55, windowMinutes: -1)
+        }
         d.set(now.timeIntervalSince1970, forKey: "ecgSessionLast")
         u.ecgSessionRunning = true
         AppLog.log("ecg session: start (\(manual ? "manual" : "auto"), \(seconds) s)")
