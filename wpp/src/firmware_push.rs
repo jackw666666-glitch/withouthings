@@ -1,36 +1,33 @@
 //! Phone-driven firmware PUSH for the Steel HR (and other push-model watches).
 //!
 //! Flow (see research/FIRMWARE_MOD.md):
-//!   phone -> CMD_UP_FIRMWARE_START (UpdateFirmware{fw_type, fw_size})
+//!   phone -> CMD_UP_FIRMWARE_START (UpdateFirmware{fw_type, fw_size})   [a WPP frame]
 //!   watch -> CMD_UP_FIRMWARE_START reply (raw 0x0000700f = {status 0, credit 0x700f})
-//!   phone -> stream CMD_UP_FIRMWARE_START frames each carrying one FwChunk{offset, packet},
-//!            FLOW-CONTROLLED: one window up front, then ~half a window per
-//!   watch -> CMD_UP_FIRMWARE_ACK (1026, status 1) credit ACK the watch sends as it flashes.
-//!   watch -> CMD_UP_FIRMWARE_REBOOT when the whole image is in; it reboots and the bootloader
-//!            picks the highest-version bank that passes CRC (no signature enforced).
+//!   phone -> stream the RAW image bytes (NO framing) straight to the watch, which writes them to
+//!            the idle flash bank verbatim; flow-controlled one window up front then a window per
+//!   watch -> CMD_UP_FIRMWARE_ACK (1026) credit it sends as it flashes.
+//!   watch -> CMD_UP_FIRMWARE_REBOOT when fw_size bytes are in; it reboots and the bootloader picks
+//!            the highest-version bank that passes CRC.
 //!
-//! The 11/13 all-at-once attempt streamed every chunk up front and never finalized (34 credit
-//! ACKs, no completion) -> the watch was overrun. This paces to the 1026 ACKs instead.
+//! CRITICAL (found 11/13 by reading bank B back): in update mode the watch writes the raw received
+//! bytes to flash verbatim. Wrapping the data in WPP/FwChunk frames baked the frame+object headers
+//! into the image (a +14 byte shift per chunk) -> corrupt -> CRC fail -> fell back to bank A every
+//! time. So the data phase sends RAW image bytes, not frames. (FwChunk is the ScanWatch PULL object,
+//! not this push.)
 //!
-//! Both the START reply and the 1026 ACK carry a raw 4-byte status that is not a WPP object, so
-//! they fail strict frame parsing; wpp-ffi's on_bytes injects synthetic empty frames for commands
-//! 1025/1026 so this state machine still sees them.
+//! Both the START reply and the 1026 ACK carry a raw 4-byte status that is not a WPP object, so they
+//! fail strict parsing; wpp-ffi's on_bytes injects synthetic empty frames for commands 1025/1026 so
+//! this state machine still sees them.
 
 use crate::commands::Command;
-use crate::frame::{Frame, HEADER_LEN, MAX_FRAME_BYTES, OBJECT_HEADER_LEN};
-use crate::objects::{FwChunk, UpdateFirmware};
+use crate::frame::{Frame, MAX_FRAME_BYTES};
+use crate::objects::UpdateFirmware;
 use crate::WppObject;
 
-/// Offset(4) + length byte(1) in front of an FwChunk's packet.
-const FW_CHUNK_FIELDS_LEN: usize = 5;
-/// Largest packet that still fits one frame.
-pub const CHUNK_CAP: usize = MAX_FRAME_BYTES - (HEADER_LEN + OBJECT_HEADER_LEN + FW_CHUNK_FIELDS_LEN);
-/// The watch's receive credit, declared in the START reply (0x0000700f). Max bytes kept in flight.
+/// Bytes of raw image per BLE write (the size the watch survives per write).
+pub const RAW_CHUNK: usize = MAX_FRAME_BYTES;
+/// The watch's receive credit from the START reply (0x0000700f). Bytes sent per credit cycle.
 const WINDOW: usize = 0x700f;
-/// Bytes to send per 1026 credit ACK. The watch ACKs once per full window it consumes (observed:
-/// 18 ACKs for a 515 KB image = 515 KB / 0x700f), so send a full window per credit — half a window
-/// (the first try) under-fed it and the watch timed out and rebooted mid-transfer.
-const STEP: usize = WINDOW;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PushProgress {
@@ -77,19 +74,14 @@ impl FirmwarePush {
         )
     }
 
-    /// Emit the next batch of FwChunks covering `[sent, sent+count)`, advancing the cursor.
-    fn emit(push: &mut Push, count: usize) -> Vec<Frame> {
+    /// Emit the next `count` bytes of the image as RAW BLE writes (<= RAW_CHUNK each), advancing the
+    /// cursor. These go out as Action::SendRaw — no WPP/FwChunk framing.
+    fn emit(push: &mut Push, count: usize) -> Vec<Vec<u8>> {
         let mut out = Vec::new();
         let target = (push.sent + count).min(push.bytes.len());
         while push.sent < target {
-            let end = (push.sent + CHUNK_CAP).min(target);
-            out.push(Frame::new(
-                Command::CMD_UP_FIRMWARE_START,
-                vec![WppObject::FwChunk(FwChunk {
-                    offset: push.sent as u32,
-                    packet: push.bytes[push.sent..end].to_vec(),
-                })],
-            ));
+            let end = (push.sent + RAW_CHUNK).min(target);
+            out.push(push.bytes[push.sent..end].to_vec());
             push.sent = end;
         }
         if push.sent >= push.bytes.len() {
@@ -98,9 +90,9 @@ impl FirmwarePush {
         out
     }
 
-    /// Feed an incoming frame. The START reply opens the stream (first window); each 1026 credit
-    /// ACK sends the next STEP bytes. Returns the frames to send.
-    pub fn on_frame(&mut self, frame: &Frame) -> Vec<Frame> {
+    /// Feed an incoming frame. The START reply opens the stream (first window); each 1026 credit ACK
+    /// sends the next window. Returns raw byte writes (no framing).
+    pub fn on_frame(&mut self, frame: &Frame) -> Vec<Vec<u8>> {
         let Some(push) = self.active.as_mut() else {
             return Vec::new();
         };
@@ -113,7 +105,7 @@ impl FirmwarePush {
                 Self::emit(push, WINDOW)
             }
             Command::CMD_UP_FIRMWARE_ACK if push.streaming && push.sent < push.bytes.len() => {
-                Self::emit(push, STEP)
+                Self::emit(push, WINDOW)
             }
             _ => Vec::new(),
         }
@@ -141,77 +133,46 @@ mod tests {
         Frame::new(Command::CMD_UP_FIRMWARE_ACK, Vec::new())
     }
 
-    fn reassemble(frames: &[Frame]) -> Vec<u8> {
-        let mut out = Vec::new();
-        for f in frames {
-            match &f.objects[0] {
-                WppObject::FwChunk(c) => {
-                    assert_eq!(c.offset as usize, out.len(), "chunks must be contiguous");
-                    out.extend_from_slice(&c.packet);
-                }
-                _ => panic!("expected FwChunk"),
-            }
-        }
-        out
-    }
-
     #[test]
     fn start_declares_type_and_size() {
         let mut fp = FirmwarePush::new();
         let f = fp.start(vec![0u8; 400], 0, false);
         assert_eq!(f.command, Command::CMD_UP_FIRMWARE_START);
         match &f.objects[0] {
-            WppObject::UpdateFirmware(u) => { assert_eq!(u.fw_size, 400); }
+            WppObject::UpdateFirmware(u) => assert_eq!(u.fw_size, 400),
             _ => panic!(),
         }
     }
 
     #[test]
-    fn small_image_fits_first_window() {
+    fn data_is_raw_bytes_not_framed() {
         let mut fp = FirmwarePush::new();
-        let n = 256;
-        fp.start(vec![7u8; n], 0, false);
-        let frames = fp.on_frame(&ack_start());
-        assert_eq!(reassemble(&frames).len(), n);
-        assert!(fp.progress().unwrap().done, "a sub-window image finishes on the start ack");
-        assert!(fp.on_frame(&ack_credit()).is_empty());
+        let img: Vec<u8> = (0..500u32).map(|i| i as u8).collect();
+        fp.start(img.clone(), 0, false);
+        let writes = fp.on_frame(&ack_start());
+        // reassembled raw writes == the image byte-for-byte (no headers injected)
+        let flat: Vec<u8> = writes.concat();
+        assert_eq!(flat, &img[..flat.len()]);
+        for w in &writes {
+            assert!(w.len() <= RAW_CHUNK);
+        }
     }
 
     #[test]
-    fn large_image_paces_across_credit_acks() {
+    fn large_image_delivers_every_byte_in_order() {
         let mut fp = FirmwarePush::new();
-        let n = WINDOW * 3 + 1234; // several windows
-        fp.start(vec![9u8; n], 0, false);
-        let mut all = reassemble(&fp.on_frame(&ack_start()));
+        let n = WINDOW * 3 + 777;
+        let img: Vec<u8> = (0..n).map(|i| (i % 251) as u8).collect();
+        fp.start(img.clone(), 0, false);
+        let mut all: Vec<u8> = fp.on_frame(&ack_start()).concat();
         assert_eq!(all.len(), WINDOW, "first window on the start ack");
-        // each credit ack sends STEP until done
         let mut guard = 0;
         while !fp.progress().unwrap().done {
-            let batch = fp.on_frame(&ack_credit());
-            assert!(!batch.is_empty(), "a credit ack before done must send more");
-            let before = all.len();
-            all.extend(reassemble_from(&batch, before));
+            all.extend(fp.on_frame(&ack_credit()).concat());
             guard += 1;
-            assert!(guard < 1000, "must terminate");
+            assert!(guard < 10000, "must terminate");
         }
-        assert_eq!(all.len(), n, "every byte sent exactly once, in order");
-        // extra acks after done do nothing
+        assert_eq!(all, img, "every byte delivered once, in order, unframed");
         assert!(fp.on_frame(&ack_credit()).is_empty());
-    }
-
-    fn reassemble_from(frames: &[Frame], base: usize) -> Vec<u8> {
-        let mut out = Vec::new();
-        let mut at = base;
-        for f in frames {
-            match &f.objects[0] {
-                WppObject::FwChunk(c) => {
-                    assert_eq!(c.offset as usize, at);
-                    out.extend_from_slice(&c.packet);
-                    at += c.packet.len();
-                }
-                _ => panic!(),
-            }
-        }
-        out
     }
 }

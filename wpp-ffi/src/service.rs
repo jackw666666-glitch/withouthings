@@ -1594,6 +1594,10 @@ impl WatchService {
                         failure.get_or_insert(error);
                     }
                 }
+                // Firmware-push data: raw bytes written to the watch with no WPP framing.
+                Action::SendRaw(bytes) => {
+                    self.transport.write(vec![bytes]);
+                }
                 Action::Finished => changed = true,
                 Action::Reconnect => self.transport.reconnect(),
                 // A token acknowledges every record before it, so nothing later

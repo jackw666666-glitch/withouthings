@@ -375,6 +375,11 @@ fn sync(link: &mut Link, association: dblib::Association) -> Result<(), Failure>
         while let Some(action) = pending.pop_front() {
             match action {
                 Action::Send(frame) | Action::Delete(frame) => link.send(&frame)?,
+                Action::SendRaw(bytes) => {
+                    for write in bytes.chunks(link.write_limit) {
+                        link.pipe.write_message(write)?;
+                    }
+                }
                 Action::Store { token, records } => {
                     for record in &records {
                         println!("stored {}", describe(record));

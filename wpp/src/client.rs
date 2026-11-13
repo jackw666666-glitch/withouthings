@@ -341,6 +341,8 @@ pub enum Event {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     Send(Frame),
+    /// Raw bytes to write to the watch with no WPP framing (firmware-push data phase).
+    SendRaw(Vec<u8>),
     Store { token: u64, records: Vec<Record> },
     Delete(Frame),
     Finished,
@@ -1139,7 +1141,7 @@ impl Client {
         }
         actions.extend(self.link.dump.on_frame(&frame).into_iter().map(Action::Send));
         self.link.spi_flash.on_frame(&frame);
-        actions.extend(self.link.firmware_push.on_frame(&frame).into_iter().map(Action::Send));
+        actions.extend(self.link.firmware_push.on_frame(&frame).into_iter().map(Action::SendRaw));
 
         // A refused menu write erases the whole store on the watch, so the
         // menu must be re-read after any error.
