@@ -27,9 +27,10 @@ const FW_CHUNK_FIELDS_LEN: usize = 5;
 pub const CHUNK_CAP: usize = MAX_FRAME_BYTES - (HEADER_LEN + OBJECT_HEADER_LEN + FW_CHUNK_FIELDS_LEN);
 /// The watch's receive credit, declared in the START reply (0x0000700f). Max bytes kept in flight.
 const WINDOW: usize = 0x700f;
-/// Bytes to send per 1026 credit ACK. The watch frees ~half a window per ACK (observed: 34 ACKs
-/// for a 515 KB image, and the declared window is 0x700f), so this keeps ~one window outstanding.
-const STEP: usize = WINDOW / 2;
+/// Bytes to send per 1026 credit ACK. The watch ACKs once per full window it consumes (observed:
+/// 18 ACKs for a 515 KB image = 515 KB / 0x700f), so send a full window per credit — half a window
+/// (the first try) under-fed it and the watch timed out and rebooted mid-transfer.
+const STEP: usize = WINDOW;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PushProgress {
