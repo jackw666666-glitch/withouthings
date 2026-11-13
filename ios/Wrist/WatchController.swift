@@ -447,7 +447,7 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         d.set(Array(done.suffix(1000)), forKey: "alertsDone")
     }
 
-    /// On a day the ScanWatch is worn: one ECG and one oxygen reading, one retry each, 3 prompts at most.
+    /// On a day the ScanWatch is worn: one ECG reading, one retry, 3 prompts at most (oxygen is automatic).
     /// Only when it is on the wrist and you have been still, 9 am to 10 pm. The crown is set to the test first.
     private func promptForTests(_ u: Unit) {
         guard u.record.entity == "scanwatch", u.burstStartedAt == nil, case .finished = u.service.progress(),
@@ -468,10 +468,10 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         guard total < 3, now.timeIntervalSince1970 - d.double(forKey: "prompt-\(day)-last") >= 3600 else { return }
 
         let ecgDone = ((try? u.service.ecgs()) ?? []).contains { $0.measuredAtMs >= dayStart }
-        let oxygenDone = ((try? u.service.latestSpo2CheckMs()) ?? nil).map { $0 >= dayStart } ?? false
+        // Oxygen is captured automatically (feature-5 auto-bursts + on-wrist SpO2 request), so it is never
+        // prompted — only ECG truly needs a manual crown hold. See drop_sleep_features / keep_features [5].
         let tests: [(name: String, label: String, shortcut: String, done: Bool)] = [
             ("ecg", "ECG", "010989000509a1000101", ecgDone),
-            ("oxygen", "Oxygen", "010989000509a1000102", oxygenDone),
         ]
         for t in tests where !t.done {
             let tries = d.integer(forKey: "prompt-\(day)-\(t.name)")
