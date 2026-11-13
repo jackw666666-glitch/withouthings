@@ -357,7 +357,20 @@ impl WatchService {
                         }));
                         frames.push(frame);
                     }
-                    StreamItem::Desync { bytes, .. } => undecoded.push(bytes),
+                    StreamItem::Desync { bytes, .. } => {
+                        // The Steel HR's UP_FIRMWARE_START ack carries a raw 4-byte status that is
+                        // not a WPP object, so it fails strict frame parsing and lands here. Deliver
+                        // a synthetic empty frame so a firmware push continues (streams its chunks).
+                        if Frame::declared_command(&bytes)
+                            == Some(wpp::commands::Command::CMD_UP_FIRMWARE_START.0)
+                        {
+                            pending.extend(inner.client.handle(Event::Frame {
+                                frame: Frame::new(wpp::commands::Command::CMD_UP_FIRMWARE_START, Vec::new()),
+                                received_at: UnixMillis(received_at_ms),
+                            }));
+                        }
+                        undecoded.push(bytes);
+                    }
                 }
             }
         }
