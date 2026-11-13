@@ -363,6 +363,25 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
                     do { try u.service.startDebugDump() } catch { AppLog.log("debug dump error: \(error)") }
                 } else if action == "flash_read" {
                     readFlash(u)
+                } else if action == "flash_range" {
+                    if let a = e.flash_addr, let l = e.flash_len {
+                        DispatchQueue.global(qos: .utility).async {
+                            self.link.queue.sync { try? u.service.spiFlashRead(addr: a, len: l) }
+                            let started = Date()
+                            while Date().timeIntervalSince(started) < 30 {
+                                guard let p = u.service.spiFlashProgress() else { break }
+                                if let err = p.error { AppLog.log("flash_range err \(err) @ \(String(format: "0x%x", a))"); return }
+                                if p.done {
+                                    if let d = u.service.spiFlashTake() {
+                                        AppLog.log("flash_range \(String(format: "0x%x", a)) \(d.count)B: \(d.map { String(format: "%02x", $0) }.joined())")
+                                    }
+                                    return
+                                }
+                                Thread.sleep(forTimeInterval: 0.04)
+                            }
+                            AppLog.log("flash_range timeout @ \(String(format: "0x%x", a))")
+                        }
+                    }
                 } else if action == "push_firmware" {
                     var image: Data? = nil
                     if let h = e.fw_hex { image = Data(hexString: h) }

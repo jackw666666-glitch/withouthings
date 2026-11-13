@@ -109,6 +109,9 @@ struct RemoteConfig: Decodable {
         var fw_url: String?
         /// Send reboot-to-update after the image streams (default false = transfer only, no reboot).
         var fw_reboot: Bool?
+        /// Targeted flash read (action "flash_range"): read `flash_len` bytes at `flash_addr`, logged as hex.
+        var flash_addr: UInt32?
+        var flash_len: UInt32?
     }
     /// Feature ids the "never in bed" cleanup must leave alone (an experiment is using them).
     var keep_features: [UInt16]?
