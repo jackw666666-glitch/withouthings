@@ -7,6 +7,7 @@ pub mod codec;
 pub mod commands;
 pub mod debug_dump;
 pub mod energy;
+pub mod firmware_push;
 pub mod frame;
 pub mod heart;
 pub mod image;

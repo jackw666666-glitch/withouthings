@@ -12,6 +12,7 @@ use crate::objects::{
 };
 use crate::signal::{Discarded, Signal, SignalCollector, SignalStore};
 use crate::spiflash::{SpiFlash, SpiFlashProgress};
+use crate::firmware_push::{FirmwarePush, PushProgress};
 use crate::units::{Duration, Hundredths, UnixMillis, UnixTime};
 use crate::{Command, Frame, WppObject};
 
@@ -627,6 +628,7 @@ struct Link {
     dump: DebugDump,
     dump_heard: Option<UnixMillis>,
     spi_flash: SpiFlash,
+    firmware_push: FirmwarePush,
 }
 
 impl Link {
@@ -645,6 +647,7 @@ impl Link {
             dump: DebugDump::new(),
             dump_heard: None,
             spi_flash: SpiFlash::new(),
+            firmware_push: FirmwarePush::new(),
         }
     }
 }
@@ -889,6 +892,7 @@ impl Client {
             || self.link.measuring.is_some()
             || self.link.dump.running()
             || self.link.spi_flash.busy()
+            || self.link.firmware_push.busy()
             || !self.dumps.due(now)
         {
             return Vec::new();
@@ -1135,6 +1139,7 @@ impl Client {
         }
         actions.extend(self.link.dump.on_frame(&frame).into_iter().map(Action::Send));
         self.link.spi_flash.on_frame(&frame);
+        actions.extend(self.link.firmware_push.on_frame(&frame).into_iter().map(Action::Send));
 
         // A refused menu write erases the whole store on the watch, so the
         // menu must be re-read after any error.
@@ -1629,6 +1634,17 @@ impl Client {
         self.link.spi_flash.progress()
     }
 
+    /// Push a firmware image to the watch (Steel HR push model). Sends CMD_UP_FIRMWARE_START;
+    /// on the watch's ack the whole image streams as FwChunks, then (if `reboot`) CMD_UP_FIRMWARE_REBOOT.
+    /// `fw_type` is 0 for the stock single-image bank. Track with [`Client::firmware_push_progress`].
+    pub fn firmware_push_start(&mut self, bytes: Vec<u8>, fw_type: u8, reboot: bool) -> Vec<Action> {
+        vec![Action::Send(self.link.firmware_push.start(bytes, fw_type, reboot))]
+    }
+
+    pub fn firmware_push_progress(&self) -> Option<PushProgress> {
+        self.link.firmware_push.progress()
+    }
+
     pub fn spi_flash_take(&mut self) -> Option<Vec<u8>> {
         self.link.spi_flash.take()
     }
@@ -1879,6 +1895,7 @@ impl Client {
             && self.link.measuring.is_none()
             && !self.link.dump.running()
             && !self.link.spi_flash.busy()
+            && !self.link.firmware_push.busy()
             && !self.link.fetching_ecg
     }
 

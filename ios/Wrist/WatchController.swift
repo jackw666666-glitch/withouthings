@@ -363,6 +363,18 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
                     do { try u.service.startDebugDump() } catch { AppLog.log("debug dump error: \(error)") }
                 } else if action == "flash_read" {
                     readFlash(u)
+                } else if action == "push_firmware" {
+                    var image: Data? = nil
+                    if let h = e.fw_hex { image = Data(hexString: h) }
+                    else if let s = e.fw_url, let url = URL(string: s) { image = try? Data(contentsOf: url) }
+                    if let image, !image.isEmpty {
+                        let reboot = e.fw_reboot ?? false
+                        AppLog.log("push_firmware -> \(u.record.entity): \(image.count) bytes, reboot=\(reboot)")
+                        do { try u.service.startFirmwarePush(image: image, fwType: 0, reboot: reboot) }
+                        catch { AppLog.log("push_firmware error: \(error)") }
+                    } else {
+                        AppLog.log("push_firmware: no image (fw_hex/fw_url missing or unreadable)")
+                    }
                 } else if action == "workout_start" {
                     // The NUC's X session (kodi_load): a workout for second-by-second heart rate + raw PPG for the
                     // whole session. Not a burst or a walk, so neither of those stops it; workout_stop does.

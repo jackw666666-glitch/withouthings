@@ -104,6 +104,11 @@ struct RemoteConfig: Decodable {
         var window_minutes: Int32?
         /// workout_start: the watch activity id (default 36).
         var activity: UInt32?
+        /// Firmware push (action "push_firmware"): the image as hex (small tests) or a URL to fetch it.
+        var fw_hex: String?
+        var fw_url: String?
+        /// Send reboot-to-update after the image streams (default false = transfer only, no reboot).
+        var fw_reboot: Bool?
     }
     /// Feature ids the "never in bed" cleanup must leave alone (an experiment is using them).
     var keep_features: [UInt16]?

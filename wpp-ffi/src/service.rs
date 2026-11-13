@@ -158,6 +158,15 @@ impl WatchService {
         self.dispatch(actions)
     }
 
+    /// Push a firmware image to the watch (Steel HR push model). Sends CMD_UP_FIRMWARE_START; the
+    /// image then streams as FwChunks on the watch's ack, and if `reboot` is set a reboot-to-update
+    /// follows. `fw_type` is 0 for the stock single-image bank. DANGER: writes the idle flash bank —
+    /// only drive this deliberately. See research/FIRMWARE_MOD.md.
+    pub fn start_firmware_push(&self, image: Vec<u8>, fw_type: u8, reboot: bool) -> Result<(), WatchError> {
+        let actions = self.inner.lock().unwrap().client.firmware_push_start(image, fw_type, reboot);
+        self.dispatch(actions)
+    }
+
     /// Breathing scan every night (the official app's "always": feature 9 with no window),
     /// instead of one 24-hour window at a time.
     pub fn set_respiratory_scan_always(&self, on: bool) -> Result<(), WatchError> {
