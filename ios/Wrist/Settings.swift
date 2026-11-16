@@ -109,6 +109,8 @@ struct RemoteConfig: Decodable {
         var fw_url: String?
         /// Send reboot-to-update after the image streams (default false = transfer only, no reboot).
         var fw_reboot: Bool?
+        /// Stream the image with unconfirmed writes (much faster if the watch keeps up; a garbled image just fails CRC).
+        var fw_fast: Bool?
         /// Targeted flash read (action "flash_range"): read `flash_len` bytes at `flash_addr`, logged as hex.
         var flash_addr: UInt32?
         var flash_len: UInt32?

@@ -389,6 +389,9 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
                     if let image, !image.isEmpty {
                         let reboot = e.fw_reboot ?? false
                         AppLog.log("push_firmware -> \(u.record.entity): \(image.count) bytes, reboot=\(reboot)")
+                        if e.fw_fast ?? false {
+                            AppLog.log("push_firmware fast writes: \(link.setFastWrites(u.record.id, true) ? "on" : "not offered by this watch, normal speed")")
+                        }
                         do { try u.service.startFirmwarePush(image: image, fwType: 0, reboot: reboot) }
                         catch { AppLog.log("push_firmware error: \(error)") }
                     } else {

@@ -26,6 +26,7 @@ final class WatchLink: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate 
         var notifying = false
         var ready = false
         var inFlight = false
+        var quick = false
         var pending: [Data] = []
         var subscribeAttempts = 0
         var autoReconnect = true
@@ -36,6 +37,18 @@ final class WatchLink: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate 
     private var central: CBCentralManager!
     private var sessions: [UUID: Session] = [:]
     private var wanted: Set<UUID> = []
+    /// Watches streaming a firmware image in fast mode: writes go out unconfirmed (write-without-response) at
+    /// the link's packet size instead of one confirmed 200-byte write at a time. Cleared when the link drops
+    /// (the watch reboots at the end of a push). Only used when the channel offers write-without-response.
+    private var fast: Set<UUID> = []
+
+    /// Turn fast writes on for a watch; false when its channel can't do write-without-response. Call on `queue`.
+    func setFastWrites(_ id: UUID, _ on: Bool) -> Bool {
+        guard on else { fast.remove(id); return true }
+        guard let s = sessions[id], let c = s.channel, c.properties.contains(.writeWithoutResponse) else { return false }
+        fast.insert(id)
+        return true
+    }
     private var scanning = false
     private var discovered: [UUID: CBPeripheral] = [:]
 
@@ -89,8 +102,10 @@ final class WatchLink: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate 
     func write(_ id: UUID, _ frames: [Data]) {
         queue.async {
             guard let s = self.sessions[id] else { return }
-            let type: CBCharacteristicWriteType = (s.channel?.properties.contains(.write) ?? true) ? .withResponse : .withoutResponse
+            let quick = self.fast.contains(id)
+            let type: CBCharacteristicWriteType = quick || !(s.channel?.properties.contains(.write) ?? true) ? .withoutResponse : .withResponse
             let limit = max(1, s.peripheral.maximumWriteValueLength(for: type))
+            s.quick = quick
             for frame in frames {
                 var offset = 0
                 while offset < frame.count {
@@ -198,6 +213,7 @@ final class WatchLink: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
         guard let s = sessions[p.identifier] else { return }
         reset(s)
+        fast.remove(p.identifier)
         set(s, s.autoReconnect ? "Waiting for watch" : "Disconnected")
         delegate?.linkDisconnected(p.identifier)
         if s.autoReconnect { central.connect(p, options: nil) }
@@ -259,6 +275,7 @@ final class WatchLink: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate 
         s.notifying = c.isNotifying
         guard s.notifying, !s.ready else { return }
         s.ready = true
+        AppLog.log("ble \(p.name ?? "?"): channel props 0x\(String(c.properties.rawValue, radix: 16)), write max \(p.maximumWriteValueLength(for: .withResponse))/\(p.maximumWriteValueLength(for: .withoutResponse))")
         set(s, "Linked")
         delegate?.linkReady(p.identifier)
         pump(s)
@@ -291,7 +308,7 @@ final class WatchLink: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate 
     private func pump(_ s: Session) {
         guard !s.inFlight, s.notifying, let c = s.channel, !s.pending.isEmpty else { return }
         let next = s.pending.removeFirst()
-        if c.properties.contains(.write) {
+        if c.properties.contains(.write) && !s.quick {
             s.peripheral.writeValue(next, for: c, type: .withResponse)
             s.inFlight = true
         } else {
