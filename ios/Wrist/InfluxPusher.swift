@@ -159,6 +159,10 @@ final class InfluxPusher {
             lines.append("watch_battery_pct,domain=sensor,entity_id=\(w.entity) value=\(b.percent)i \(b.atMs / 1000)")
         }
 
+        // Phone steps from Apple Health (daily totals, refreshed in the background for the next push).
+        lines += HealthSteps.lines()
+        HealthSteps.refresh()
+
         guard !lines.isEmpty else { done("Influx: nothing new"); return }
         var comps = URLComponents(string: cfg.influx_url + "/api/v2/write")!
         comps.queryItems = [.init(name: "org", value: cfg.influx_org), .init(name: "bucket", value: cfg.influx_bucket),
