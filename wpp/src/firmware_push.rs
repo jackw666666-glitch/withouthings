@@ -24,15 +24,22 @@ use crate::frame::{Frame, MAX_FRAME_BYTES};
 use crate::objects::UpdateFirmware;
 use crate::WppObject;
 
-/// Bytes of raw image per BLE write (the size the watch survives per write).
+/// Bytes of raw image per BLE write when the caller names no size (the size the watch survives per write).
 pub const RAW_CHUNK: usize = MAX_FRAME_BYTES;
-/// The watch's receive credit from the START reply (0x0000700f). Bytes sent per credit cycle.
-const WINDOW: usize = 0x700f;
+/// The watch acknowledges (CMD_UP_FIRMWARE_ACK) once per this many received WRITES, whatever their
+/// size. Read out of the ScanWatch 1 handler (0x66828: `count % ack_every == 0`), and the START reply
+/// `00 00 70 0f` is {status 0, 0x70 = 112 max bytes per unconfirmed write, 0x0f = ack every 15 writes}
+/// — not a 0x700f-byte credit, which is what this module assumed until 11/26 and which queued the
+/// whole image up front.
+pub const ACK_EVERY: usize = 15;
+/// Windows (of ACK_EVERY writes) kept in flight, so the link never idles waiting for an ACK.
+const WINDOWS_IN_FLIGHT: usize = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PushProgress {
     pub sent: usize,
     pub total: usize,
+    /// Every image byte has been handed to the link (the watch may still be flashing and will reboot).
     pub done: bool,
     pub streaming: bool,
 }
@@ -40,6 +47,8 @@ pub struct PushProgress {
 #[derive(Debug, Clone)]
 struct Push {
     bytes: Vec<u8>,
+    /// Size of each write on the air: the pacing counts writes, so this must be what the link sends.
+    write_bytes: usize,
     streaming: bool,
     sent: usize,
     done: bool,
@@ -59,28 +68,32 @@ impl FirmwarePush {
         self.active = None;
     }
 
+    /// True from START until the link drops (the watch reboots itself once the image is in). The push
+    /// owns the channel for all of that time: in update mode the watch writes every received byte to
+    /// the flash bank, so no other frame may be written, including after the last image byte is queued.
     pub fn busy(&self) -> bool {
-        self.active.as_ref().map_or(false, |p| !p.done)
+        self.active.is_some()
     }
 
-    /// Begin a push: yields the CMD_UP_FIRMWARE_START frame. `reboot` is accepted for API
-    /// compatibility but unused — the watch reboots itself once the whole image is in.
-    pub fn start(&mut self, bytes: Vec<u8>, fw_type: u8, _reboot: bool) -> Frame {
+    /// Begin a push: yields the CMD_UP_FIRMWARE_START frame. `write_bytes` is the size of one BLE
+    /// write as the link will send it (0 = RAW_CHUNK). `reboot` is accepted for API compatibility but
+    /// unused — the watch reboots itself once the whole image is in.
+    pub fn start(&mut self, bytes: Vec<u8>, fw_type: u8, _reboot: bool, write_bytes: usize) -> Frame {
         let fw_size = bytes.len() as u32;
-        self.active = Some(Push { bytes, streaming: false, sent: 0, done: false });
+        let write_bytes = if write_bytes == 0 { RAW_CHUNK } else { write_bytes };
+        self.active = Some(Push { bytes, write_bytes, streaming: false, sent: 0, done: false });
         Frame::new(
             Command::CMD_UP_FIRMWARE_START,
             vec![WppObject::UpdateFirmware(UpdateFirmware { fw_type, fw_size })],
         )
     }
 
-    /// Emit the next `count` bytes of the image as RAW BLE writes (<= RAW_CHUNK each), advancing the
-    /// cursor. These go out as Action::SendRaw — no WPP/FwChunk framing.
-    fn emit(push: &mut Push, count: usize) -> Vec<Vec<u8>> {
+    /// Emit the next `writes` BLE writes of the image (`write_bytes` each, the last one shorter),
+    /// advancing the cursor. These go out as Action::SendRaw — no WPP/FwChunk framing.
+    fn emit(push: &mut Push, writes: usize) -> Vec<Vec<u8>> {
         let mut out = Vec::new();
-        let target = (push.sent + count).min(push.bytes.len());
-        while push.sent < target {
-            let end = (push.sent + RAW_CHUNK).min(target);
+        while out.len() < writes && push.sent < push.bytes.len() {
+            let end = (push.sent + push.write_bytes).min(push.bytes.len());
             out.push(push.bytes[push.sent..end].to_vec());
             push.sent = end;
         }
@@ -90,8 +103,9 @@ impl FirmwarePush {
         out
     }
 
-    /// Feed an incoming frame. The START reply opens the stream (first window); each 1026 credit ACK
-    /// sends the next window. Returns raw byte writes (no framing).
+    /// Feed an incoming frame. The START reply opens the stream with WINDOWS_IN_FLIGHT windows; each
+    /// 1026 ACK means the watch took ACK_EVERY more writes, so that many more go out. Returns raw
+    /// byte writes (no framing).
     pub fn on_frame(&mut self, frame: &Frame) -> Vec<Vec<u8>> {
         let Some(push) = self.active.as_mut() else {
             return Vec::new();
@@ -102,11 +116,9 @@ impl FirmwarePush {
         match frame.command.opcode() {
             Command::CMD_UP_FIRMWARE_START if !push.streaming => {
                 push.streaming = true;
-                Self::emit(push, WINDOW)
+                Self::emit(push, ACK_EVERY * WINDOWS_IN_FLIGHT)
             }
-            Command::CMD_UP_FIRMWARE_ACK if push.streaming && push.sent < push.bytes.len() => {
-                Self::emit(push, WINDOW)
-            }
+            Command::CMD_UP_FIRMWARE_ACK if push.streaming => Self::emit(push, ACK_EVERY),
             _ => Vec::new(),
         }
     }
@@ -136,7 +148,7 @@ mod tests {
     #[test]
     fn start_declares_type_and_size() {
         let mut fp = FirmwarePush::new();
-        let f = fp.start(vec![0u8; 400], 0, false);
+        let f = fp.start(vec![0u8; 400], 0, false, 0);
         assert_eq!(f.command, Command::CMD_UP_FIRMWARE_START);
         match &f.objects[0] {
             WppObject::UpdateFirmware(u) => assert_eq!(u.fw_size, 400),
@@ -148,7 +160,7 @@ mod tests {
     fn data_is_raw_bytes_not_framed() {
         let mut fp = FirmwarePush::new();
         let img: Vec<u8> = (0..500u32).map(|i| i as u8).collect();
-        fp.start(img.clone(), 0, false);
+        fp.start(img.clone(), 0, false, 0);
         let writes = fp.on_frame(&ack_start());
         // reassembled raw writes == the image byte-for-byte (no headers injected)
         let flat: Vec<u8> = writes.concat();
@@ -159,20 +171,36 @@ mod tests {
     }
 
     #[test]
-    fn large_image_delivers_every_byte_in_order() {
-        let mut fp = FirmwarePush::new();
-        let n = WINDOW * 3 + 777;
-        let img: Vec<u8> = (0..n).map(|i| (i % 251) as u8).collect();
-        fp.start(img.clone(), 0, false);
-        let mut all: Vec<u8> = fp.on_frame(&ack_start()).concat();
-        assert_eq!(all.len(), WINDOW, "first window on the start ack");
-        let mut guard = 0;
-        while !fp.progress().unwrap().done {
-            all.extend(fp.on_frame(&ack_credit()).concat());
-            guard += 1;
-            assert!(guard < 10000, "must terminate");
+    fn paced_by_writes_and_owns_the_channel_until_reset() {
+        for write_bytes in [112usize, 200] {
+            let mut fp = FirmwarePush::new();
+            let n: usize = 866_776;
+            let img: Vec<u8> = (0..n).map(|i| (i % 251) as u8).collect();
+            fp.start(img.clone(), 0, false, write_bytes);
+            assert!(fp.busy());
+            assert!(fp.on_frame(&ack_credit()).is_empty(), "nothing before the START reply");
+            let first = fp.on_frame(&ack_start());
+            assert_eq!(first.len(), ACK_EVERY * WINDOWS_IN_FLIGHT);
+            assert!(first.iter().all(|w| w.len() == write_bytes));
+            let mut all: Vec<u8> = first.concat();
+            // the watch acks once per ACK_EVERY writes it received
+            let total_writes = n.div_ceil(write_bytes);
+            let mut acks = 0;
+            while !fp.progress().unwrap().done {
+                let w = fp.on_frame(&ack_credit());
+                assert!(w.len() <= ACK_EVERY);
+                all.extend(w.concat());
+                acks += 1;
+                // never more than WINDOWS_IN_FLIGHT windows ahead of what the watch acknowledged
+                let sent_writes = all.len().div_ceil(write_bytes);
+                assert!(sent_writes <= (acks + WINDOWS_IN_FLIGHT) * ACK_EVERY);
+                assert!(acks <= total_writes / ACK_EVERY + 1, "must terminate");
+            }
+            assert_eq!(all, img, "every byte delivered once, in order, unframed");
+            assert!(fp.on_frame(&ack_credit()).is_empty());
+            assert!(fp.busy(), "still owns the channel until the link resets");
+            fp.reset();
+            assert!(!fp.busy());
         }
-        assert_eq!(all, img, "every byte delivered once, in order, unframed");
-        assert!(fp.on_frame(&ack_credit()).is_empty());
     }
 }

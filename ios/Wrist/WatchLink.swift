@@ -49,6 +49,16 @@ final class WatchLink: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate 
         fast.insert(id)
         return true
     }
+    /// Size of one BLE write to this watch as `write` will send it (fast = write-without-response at the link
+    /// packet size, else confirmed writes capped at the 200 bytes the watches are proven to take). The firmware
+    /// push paces by write COUNT (the watch acks every 15 writes), so it must cut the image at exactly this size.
+    /// Call on `queue`.
+    func writeSize(_ id: UUID) -> Int {
+        guard let s = sessions[id] else { return 200 }
+        let quick = fast.contains(id)
+        let type: CBCharacteristicWriteType = quick || !(s.channel?.properties.contains(.write) ?? true) ? .withoutResponse : .withResponse
+        return max(20, min(200, s.peripheral.maximumWriteValueLength(for: type)))
+    }
     private var scanning = false
     private var discovered: [UUID: CBPeripheral] = [:]
 

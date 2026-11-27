@@ -1659,7 +1659,13 @@ impl Client {
     /// on the watch's ack the whole image streams as FwChunks, then (if `reboot`) CMD_UP_FIRMWARE_REBOOT.
     /// `fw_type` is 0 for the stock single-image bank. Track with [`Client::firmware_push_progress`].
     pub fn firmware_push_start(&mut self, bytes: Vec<u8>, fw_type: u8, reboot: bool) -> Vec<Action> {
-        vec![Action::Send(self.link.firmware_push.start(bytes, fw_type, reboot))]
+        self.firmware_push_start_sized(bytes, fw_type, reboot, 0)
+    }
+
+    /// As [`Client::firmware_push_start`], naming the size of one BLE write as the link sends it
+    /// (the watch acknowledges per write count, so the pacing needs the real size; 0 = default).
+    pub fn firmware_push_start_sized(&mut self, bytes: Vec<u8>, fw_type: u8, reboot: bool, write_bytes: usize) -> Vec<Action> {
+        vec![Action::Send(self.link.firmware_push.start(bytes, fw_type, reboot, write_bytes))]
     }
 
     pub fn firmware_push_progress(&self) -> Option<PushProgress> {

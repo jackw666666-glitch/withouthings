@@ -173,10 +173,13 @@ impl WatchService {
         reboot: bool,
         watch: String,
         confirm: Option<String>,
+        write_bytes: u32,
     ) -> Result<(), WatchError> {
         wpp::fw_guard::check_firmware_push(&watch, &image, confirm.as_deref())
             .map_err(|reason| WatchError::Refused { reason })?;
-        let actions = self.inner.lock().unwrap().client.firmware_push_start(image, fw_type, reboot);
+        // `write_bytes` = size of one BLE write as the link will send it: the watch acknowledges every
+        // 15 writes, so the pacing counts writes of exactly this size (0 = the 200-byte default).
+        let actions = self.inner.lock().unwrap().client.firmware_push_start_sized(image, fw_type, reboot, write_bytes as usize);
         self.dispatch(actions)
     }
 

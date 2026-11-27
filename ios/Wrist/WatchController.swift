@@ -395,8 +395,11 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
                         // wpp fw_guard refuses an image that is not this watch's own stock layout (wrong
                         // watch = bootloader/SoftDevice rewrite = brick), an odd ScanWatch version, or a
                         // missing confirm token, before anything is sent.
+                        let writeBytes = link.writeSize(u.record.id)
+                        AppLog.log("push_firmware pacing: \(writeBytes) B per write, 15 writes per watch ack")
                         do { try u.service.startFirmwarePush(image: image, fwType: 0, reboot: reboot,
-                                                             watch: u.record.entity, confirm: e.fw_confirm) }
+                                                             watch: u.record.entity, confirm: e.fw_confirm,
+                                                             writeBytes: UInt32(writeBytes)) }
                         catch { AppLog.log("push_firmware REFUSED/error: \(error)") }
                     } else {
                         AppLog.log("push_firmware: no image (fw_hex/fw_url missing or unreadable)")
