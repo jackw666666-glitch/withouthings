@@ -31,11 +31,18 @@ import hashlib
 import struct
 from binascii import crc32
 from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import fw_guard  # noqa: E402  twin of wpp/src/fw_guard.rs
 
 HEADER_VERSION = 1
 IE_APPL = 1
 IE_NAMES = {1: "appl", 4: "bl", 8: "sd", 10: "sig"}
 APPL_BASE = 0x27000
+# Version trailer per watch where it is not the upstream hwa10 default: SW1 fw2941 ends its
+# 0xa93fc-byte appl part at 0xd03f8 (research/FIRMWARE_MOD.md §13).
+WATCH_VERSION_ADDRESS = {"scanwatch": 0xD03F8}
 # Where get_fw_version (0x36e70) reads the version in the stock image: the u32
 # after the build string. A relinked part's is wherever its section was placed,
 # which --symbols reads out of the ELF.
@@ -157,6 +164,13 @@ def main():
                         help="the linked ELF of the image being packaged, which is"
                              " where the version trailer's address comes from;"
                              " required with --appl")
+    parser.add_argument("--watch", required=True, choices=["scanwatch", "steelhr", "hwa10"],
+                        help="the watch the package is for. scanwatch/steelhr: the output must pass"
+                             " fw_guard (that watch's own bootloader/SoftDevice, stock layout, even"
+                             " ScanWatch version) or nothing is written. hwa10 = upstream ScanWatch 2,"
+                             " unguarded; never push it to a ScanWatch 1 or Steel HR")
+    parser.add_argument("--version-address", type=lambda v: int(v, 0),
+                        help="override where the appl version trailer lives (absolute address)")
     parser.add_argument("source", type=Path)
     parser.add_argument("destination", type=Path)
     arguments = parser.parse_args()
@@ -165,6 +179,10 @@ def main():
 
     source = arguments.source.read_bytes()
     header_length, entries = parse_header(source)
+    # A bank-sized image (e.g. fw2941.bin) is the package followed by 0xFF erase padding.
+    padded_end = max(e.addr + e.length for e in entries)
+    if padded_end < len(source) and set(source[padded_end:]) == {0xFF}:
+        source = source[:padded_end]
     appl = next((e for e in entries if e.ie == IE_APPL), None)
     if appl is None:
         raise SystemExit("no appl entry in the header")
@@ -178,7 +196,12 @@ def main():
         if stored != entry.crc:
             raise SystemExit(f"{entry.name} CRC {entry.crc:#010x} != computed {stored:#010x}")
 
-    address = version_address(arguments.symbols, arguments.appl is not None)
+    if arguments.version_address is not None:
+        address = arguments.version_address
+    elif arguments.watch == "scanwatch":
+        address = WATCH_VERSION_ADDRESS["scanwatch"]
+    else:
+        address = version_address(arguments.symbols, arguments.appl is not None)
     if address % 4 or not APPL_BASE <= address < BOOTLOADER_BASE:
         raise SystemExit(f"the version trailer resolves to {address:#x}, which is"
                          " not a word inside the appl part")
@@ -235,6 +258,14 @@ def main():
     body_length = struct.unpack_from("<H", out, 2)[0]
     header_crc = crc32(bytes(out[: 4 + body_length]))
     struct.pack_into("<I", out, 4 + body_length, header_crc)
+    if arguments.watch in fw_guard.PROFILES:
+        try:
+            v, c, n, token = fw_guard.check_image(arguments.watch, bytes(out))
+        except fw_guard.Refused as refused:
+            raise SystemExit(f"REFUSED for {arguments.watch}: {refused}; nothing written")
+    else:
+        token = None
+        print(f"WARNING: {arguments.watch} has no guard profile; this package must never go to a ScanWatch 1 or Steel HR")
     arguments.destination.write_bytes(bytes(out))
 
     print(f"{arguments.source} -> {arguments.destination}  {len(out)} bytes ({len(out):#x})")
@@ -247,6 +278,8 @@ def main():
     print(f"appl_version_address {address:#x}")
     print(f"header crc32 {header_crc:#010x}")
     print(f"sha1         {hashlib.sha1(bytes(out)).hexdigest()}")
+    if token:
+        print(f"confirm token {token}   (wrist_cmd.py pushfw {arguments.watch} <file> --confirm {token})")
 
 
 if __name__ == "__main__":

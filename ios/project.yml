@@ -20,7 +20,7 @@ targets:
         OTHER_LDFLAGS: -lwpp_ffi
         INFOPLIST_FILE: Wrist/Info.plist
         GENERATE_INFOPLIST_FILE: NO
-        MARKETING_VERSION: "0.8.28"
+        MARKETING_VERSION: "0.8.29"
         CURRENT_PROJECT_VERSION: "57"
         TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGNING_ALLOWED: NO

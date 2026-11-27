@@ -392,8 +392,12 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
                         if e.fw_fast ?? false {
                             AppLog.log("push_firmware fast writes: \(link.setFastWrites(u.record.id, true) ? "on" : "not offered by this watch, normal speed")")
                         }
-                        do { try u.service.startFirmwarePush(image: image, fwType: 0, reboot: reboot) }
-                        catch { AppLog.log("push_firmware error: \(error)") }
+                        // wpp fw_guard refuses an image that is not this watch's own stock layout (wrong
+                        // watch = bootloader/SoftDevice rewrite = brick), an odd ScanWatch version, or a
+                        // missing confirm token, before anything is sent.
+                        do { try u.service.startFirmwarePush(image: image, fwType: 0, reboot: reboot,
+                                                             watch: u.record.entity, confirm: e.fw_confirm) }
+                        catch { AppLog.log("push_firmware REFUSED/error: \(error)") }
                     } else {
                         AppLog.log("push_firmware: no image (fw_hex/fw_url missing or unreadable)")
                     }
@@ -421,8 +425,12 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
                     AppLog.log("experiment \(e.id) -> \(u.record.entity): feature \(f) window \(e.window_minutes ?? 0) min")
                 } catch { AppLog.log("experiment \(e.id) error: \(error)") }
             } else if let hex = e.hex, let bytes = Data(hexString: hex) {
-                AppLog.log("experiment \(e.id) -> \(u.record.entity): \(hex)")
-                send(u.record.id, [bytes])
+                if let why = rawCommandRefusal(watch: u.record.entity, frames: bytes) {
+                    AppLog.log("experiment \(e.id) REFUSED -> \(u.record.entity): \(why)")
+                } else {
+                    AppLog.log("experiment \(e.id) -> \(u.record.entity): \(hex)")
+                    send(u.record.id, [bytes])
+                }
             } else { AppLog.log("experiment \(e.id): nothing to send"); }
             done.insert(e.id)
         }
@@ -631,6 +639,11 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
         var frames: [Data] = []
         for p in polls where p.watch == u.record.entity {
             guard now - (last[p.id] ?? 0) >= Double(p.every_minutes) * 60, let f = Data(hexString: p.hex) else { continue }
+            if let why = rawCommandRefusal(watch: u.record.entity, frames: f) {
+                AppLog.log("poll \(p.id) REFUSED -> \(u.record.entity): \(why)")
+                last[p.id] = now
+                continue
+            }
             frames.append(f)
             last[p.id] = now
         }

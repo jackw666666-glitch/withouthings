@@ -1,7 +1,7 @@
 use wpp::track::{self, Track};
 use wpp::units::UnixMillis;
 
-use crate::records::{Origin, Point};
+use crate::records::{Origin, Point, WatchError};
 
 #[derive(uniffi::Record, Debug, Clone, Copy, PartialEq)]
 pub struct TrackSummary {
@@ -174,4 +174,20 @@ fn of_view(view: track::View) -> MapView {
         width_px: view.width_px,
         height_px: view.height_px,
     }
+}
+
+/// Check a firmware image for `watch` without sending anything. Returns the confirm token a push of
+/// it needs (empty when the watch needs none), or Refused with the reason it must not be pushed.
+#[uniffi::export]
+pub fn check_firmware_image(watch: String, image: Vec<u8>) -> Result<String, WatchError> {
+    wpp::fw_guard::check_firmware_image(&watch, &image)
+        .map(|c| c.confirm_token)
+        .map_err(|reason| WatchError::Refused { reason })
+}
+
+/// Why a raw command must not be written to `watch` (blocked opcode or malformed blob), or None if
+/// it may go.
+#[uniffi::export]
+pub fn raw_command_refusal(watch: String, frames: Vec<u8>) -> Option<String> {
+    wpp::fw_guard::check_raw_frames(&watch, &frames).err()
 }

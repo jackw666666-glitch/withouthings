@@ -111,6 +111,8 @@ struct RemoteConfig: Decodable {
         var fw_reboot: Bool?
         /// Stream the image with unconfirmed writes (much faster if the watch keeps up; a garbled image just fails CRC).
         var fw_fast: Bool?
+        /// Confirm token the push must carry (`scanwatch-<appl crc>`; see wpp fw_guard).
+        var fw_confirm: String?
         /// Targeted flash read (action "flash_range"): read `flash_len` bytes at `flash_addr`, logged as hex.
         var flash_addr: UInt32?
         var flash_len: UInt32?

@@ -162,7 +162,20 @@ impl WatchService {
     /// image then streams as FwChunks on the watch's ack, and if `reboot` is set a reboot-to-update
     /// follows. `fw_type` is 0 for the stock single-image bank. DANGER: writes the idle flash bank —
     /// only drive this deliberately. See research/FIRMWARE_MOD.md.
-    pub fn start_firmware_push(&self, image: Vec<u8>, fw_type: u8, reboot: bool) -> Result<(), WatchError> {
+    ///
+    /// `watch` is the watch this service talks to ("scanwatch" / "steelhr"). The image must pass
+    /// wpp::fw_guard for that watch (its own stock bootloader/SoftDevice, stock layout, even version on
+    /// the ScanWatch) and carry `confirm` where the watch needs one, or nothing is sent.
+    pub fn start_firmware_push(
+        &self,
+        image: Vec<u8>,
+        fw_type: u8,
+        reboot: bool,
+        watch: String,
+        confirm: Option<String>,
+    ) -> Result<(), WatchError> {
+        wpp::fw_guard::check_firmware_push(&watch, &image, confirm.as_deref())
+            .map_err(|reason| WatchError::Refused { reason })?;
         let actions = self.inner.lock().unwrap().client.firmware_push_start(image, fw_type, reboot);
         self.dispatch(actions)
     }
