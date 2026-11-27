@@ -74,6 +74,8 @@ const SILENCE_TIMEOUT_MS: i64 = 90_000;
 /// A history stream the watch never answers is skipped after this long. The watch keeps
 /// sending its once-a-minute sync request meanwhile, so the silence timeout never fires.
 const STREAM_TIMEOUT_MS: i64 = 30_000;
+/// A firmware push that sends no new bytes for this long is dead: reconnect (the watch falls back to its good bank).
+const PUSH_STALL_TIMEOUT_MS: i64 = 180_000;
 /// The watch measures once a second but its readings carry no time and often
 /// reach the phone in pairs, so their arrival is not their time.
 const LIVE_HR_PERIOD: Duration = Duration::from_millis(1_000);
@@ -618,6 +620,8 @@ struct Link {
     busy_retries: u32,
     last_heard: Option<UnixMillis>,
     last_spoke: Option<UnixMillis>,
+    /// (bytes sent, when that count was first seen) of a running firmware push, for its stall timeout.
+    push_watch: Option<(usize, UnixMillis)>,
     last_live_hr: Option<UnixMillis>,
     /// When the open stream was last asked for or last answered.
     walk_since: Option<UnixMillis>,
@@ -640,6 +644,7 @@ impl Link {
             busy_retries: 0,
             last_heard: None,
             last_spoke: None,
+            push_watch: None,
             last_live_hr: None,
             walk_since: None,
             measuring: None,
@@ -1021,6 +1026,20 @@ impl Client {
                 return self.noted(now, actions);
             }
         }
+        // A firmware push owns the channel: every other frame is held back, so nothing gets a reply
+        // and the silence timeout below would cut the link mid-transfer (11/26, 90 s into push #2).
+        // Judge the link by the push's own progress instead.
+        if let Some(progress) = self.link.firmware_push.progress().filter(|p| !p.done) {
+            match self.link.push_watch {
+                Some((sent, _)) if sent == progress.sent => {}
+                _ => self.link.push_watch = Some((progress.sent, now)),
+            }
+            if self.link.push_watch.is_some_and(|(_, since)| now.0 - since.0 > PUSH_STALL_TIMEOUT_MS) {
+                return vec![Action::Reconnect];
+            }
+            return Vec::new();
+        }
+        self.link.push_watch = None;
         let Some(heard) = self.link.last_heard else {
             return Vec::new();
         };
@@ -4204,6 +4223,37 @@ mod tests {
         client.set_wear_position(2, sent_at);
         assert_eq!(
             client.handle(Event::Tick { now: UnixMillis(sent_at.0 + SILENCE_TIMEOUT_MS + 1) }),
+            vec![Action::Reconnect]
+        );
+    }
+
+    #[test]
+    fn a_firmware_push_is_not_cut_by_the_silence_timeout_but_a_stalled_one_is() {
+        let mut client = synced();
+        client.handle(Event::Frame {
+            received_at: UnixMillis(1_000_000),
+            frame: Frame::new(Command::CMD_BATTERY_STATUS, Vec::new()),
+        });
+        let start = UnixMillis(1_000_500);
+        client.firmware_push_start(vec![0u8; 200_000], 0, true);
+        assert!(client.firmware_push_busy());
+        // a command "sent" during the push (the service holds it back) never gets a reply
+        client.set_wear_position(2, start);
+        // the watch opens the stream and acks windows; time passes well beyond the silence timeout
+        let mut now = start.0;
+        client.handle(Event::Frame { received_at: UnixMillis(now), frame: Frame::new(Command::CMD_UP_FIRMWARE_START, Vec::new()) });
+        for _ in 0..4 {
+            now += 40_000;
+            assert_eq!(client.handle(Event::Tick { now: UnixMillis(now) }), Vec::new(), "cut at {now}");
+            client.handle(Event::Frame { received_at: UnixMillis(now), frame: Frame::new(Command::CMD_UP_FIRMWARE_ACK, Vec::new()) });
+        }
+        assert!(now - start.0 > SILENCE_TIMEOUT_MS);
+        assert!(client.firmware_push_busy());
+        // now the watch stops acking: no new bytes go out, and after the stall timeout the link is cut
+        client.handle(Event::Tick { now: UnixMillis(now + 1_000) });
+        assert_eq!(client.handle(Event::Tick { now: UnixMillis(now + 1_000 + PUSH_STALL_TIMEOUT_MS - 1) }), Vec::new());
+        assert_eq!(
+            client.handle(Event::Tick { now: UnixMillis(now + 1_000 + PUSH_STALL_TIMEOUT_MS + 1) }),
             vec![Action::Reconnect]
         );
     }
