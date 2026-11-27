@@ -75,6 +75,14 @@ impl FirmwarePush {
         self.active.is_some()
     }
 
+    /// Take the channel BEFORE the push: from here `busy()` is true and every other frame is held back,
+    /// so nothing is in flight when START goes out a few seconds later. (11/26 push #7: two screen
+    /// commands sent 0.27 s before START kept the watch busy 13 s and its START reply was lost, leaving
+    /// the watch in update mode with nothing streaming.)
+    pub fn arm(&mut self) {
+        self.active = Some(Push { bytes: Vec::new(), write_bytes: RAW_CHUNK, streaming: false, sent: 0, done: false });
+    }
+
     /// Begin a push: yields the CMD_UP_FIRMWARE_START frame. `write_bytes` is the size of one BLE
     /// write as the link will send it (0 = RAW_CHUNK). `reboot` is accepted for API compatibility but
     /// unused — the watch reboots itself once the whole image is in.
@@ -168,6 +176,17 @@ mod tests {
         for w in &writes {
             assert!(w.len() <= RAW_CHUNK);
         }
+    }
+
+    #[test]
+    fn arming_takes_the_channel_and_sends_nothing() {
+        let mut fp = FirmwarePush::new();
+        fp.arm();
+        assert!(fp.busy());
+        assert!(fp.on_frame(&ack_credit()).is_empty());
+        let img = vec![7u8; 1000];
+        fp.start(img.clone(), 0, false, 200);
+        assert_eq!(fp.on_frame(&ack_start()).concat(), img);
     }
 
     #[test]

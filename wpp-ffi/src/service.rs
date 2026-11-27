@@ -183,6 +183,21 @@ impl WatchService {
         self.dispatch(actions)
     }
 
+    /// True once the watch has answered START and image bytes are flowing.
+    pub fn firmware_push_streaming(&self) -> bool {
+        self.inner.lock().unwrap().client.firmware_push_progress().is_some_and(|p| p.streaming)
+    }
+
+    /// Step 1 of a push: check the image (same guard as the push itself) and take the channel, so that
+    /// nothing else is written to the watch from now on. Call `start_firmware_push` ~15 s later, once
+    /// whatever was already in flight has been answered.
+    pub fn prepare_firmware_push(&self, image: Vec<u8>, watch: String, confirm: Option<String>) -> Result<(), WatchError> {
+        wpp::fw_guard::check_firmware_push(&watch, &image, confirm.as_deref())
+            .map_err(|reason| WatchError::Refused { reason })?;
+        self.inner.lock().unwrap().client.firmware_push_arm();
+        Ok(())
+    }
+
     /// True while a firmware push is streaming: nothing else may be written to this watch.
     pub fn firmware_push_busy(&self) -> bool {
         self.inner.lock().unwrap().client.firmware_push_busy()

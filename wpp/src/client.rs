@@ -1662,6 +1662,11 @@ impl Client {
         self.firmware_push_start_sized(bytes, fw_type, reboot, 0)
     }
 
+    /// Hold the channel for a coming firmware push: everything else is held back from now on.
+    pub fn firmware_push_arm(&mut self) {
+        self.link.firmware_push.arm();
+    }
+
     /// As [`Client::firmware_push_start`], naming the size of one BLE write as the link sends it
     /// (the watch acknowledges per write count, so the pacing needs the real size; 0 = default).
     pub fn firmware_push_start_sized(&mut self, bytes: Vec<u8>, fw_type: u8, reboot: bool, write_bytes: usize) -> Vec<Action> {

@@ -395,12 +395,29 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
                         // wpp fw_guard refuses an image that is not this watch's own stock layout (wrong
                         // watch = bootloader/SoftDevice rewrite = brick), an odd ScanWatch version, or a
                         // missing confirm token, before anything is sent.
-                        let writeBytes = link.writeSize(u.record.id)
-                        AppLog.log("push_firmware pacing: \(writeBytes) B per write, 15 writes per watch ack")
-                        do { try u.service.startFirmwarePush(image: image, fwType: 0, reboot: reboot,
-                                                             watch: u.record.entity, confirm: e.fw_confirm,
-                                                             writeBytes: UInt32(writeBytes)) }
-                        catch { AppLog.log("push_firmware REFUSED/error: \(error)") }
+                        // Step 1: guard check + take the channel. Everything else to this watch is held back from
+                        // here, so nothing is in flight when START goes out (11/26: screen commands sent 0.27 s
+                        // before START cost the START reply and left the watch stuck in update mode).
+                        do {
+                            try u.service.prepareFirmwarePush(image: image, watch: u.record.entity, confirm: e.fw_confirm)
+                            AppLog.log("push_firmware: channel held, START in 15 s")
+                            let confirm = e.fw_confirm
+                            link.queue.asyncAfter(deadline: .now() + 15) {
+                                let writeBytes = self.link.writeSize(u.record.id)
+                                AppLog.log("push_firmware pacing: \(writeBytes) B per write, 15 writes per watch ack")
+                                do { try u.service.startFirmwarePush(image: image, fwType: 0, reboot: reboot,
+                                                                     watch: u.record.entity, confirm: confirm,
+                                                                     writeBytes: UInt32(writeBytes)) }
+                                catch { AppLog.log("push_firmware REFUSED/error: \(error)"); return }
+                                // The watch answers START after its ~12 s bank erase. No answer = it may be sitting in
+                                // update mode with nothing coming: only a real Bluetooth disconnect frees it.
+                                self.link.queue.asyncAfter(deadline: .now() + 45) {
+                                    if u.service.firmwarePushBusy() && !u.service.firmwarePushStreaming() {
+                                        AppLog.log("push_firmware: NO START REPLY after 45 s. If the watch shows the updating screen: Settings > Bluetooth off, 15 s, on")
+                                    }
+                                }
+                            }
+                        } catch { AppLog.log("push_firmware REFUSED/error: \(error)") }
                     } else {
                         AppLog.log("push_firmware: no image (fw_hex/fw_url missing or unreadable)")
                     }
