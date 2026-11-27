@@ -1647,6 +1647,14 @@ impl Client {
         self.link.firmware_push.progress()
     }
 
+    /// True from CMD_UP_FIRMWARE_START until the last image byte is out. While it is, the watch is in
+    /// update mode and writes EVERY byte it receives on the channel into the flash bank verbatim
+    /// (11/26: polls and sync frames sent mid-push landed inside bank B and corrupted the image), so
+    /// nothing but the push itself may be written to the watch.
+    pub fn firmware_push_busy(&self) -> bool {
+        self.link.firmware_push.busy()
+    }
+
     pub fn spi_flash_take(&mut self) -> Option<Vec<u8>> {
         self.link.spi_flash.take()
     }

@@ -180,6 +180,11 @@ impl WatchService {
         self.dispatch(actions)
     }
 
+    /// True while a firmware push is streaming: nothing else may be written to this watch.
+    pub fn firmware_push_busy(&self) -> bool {
+        self.inner.lock().unwrap().client.firmware_push_busy()
+    }
+
     /// Breathing scan every night (the official app's "always": feature 9 with no window),
     /// instead of one 24-hour window at a time.
     pub fn set_respiratory_scan_always(&self, on: bool) -> Result<(), WatchError> {
@@ -1602,6 +1607,11 @@ impl WatchService {
         let mut unkept = false;
         while let Some(action) = actions.pop_front() {
             match action {
+                // A firmware push owns the channel: the watch flashes every byte it receives, so any
+                // other frame would be written into the image. Only the push's own START goes out.
+                Action::Send(frame) | Action::Delete(frame)
+                    if frame.command.opcode() != wpp::commands::Command::CMD_UP_FIRMWARE_START
+                        && self.firmware_push_busy() => {}
                 Action::Send(frame) | Action::Delete(frame) => {
                     if let Err(error) = self.write(&frame) {
                         failure.get_or_insert(error);

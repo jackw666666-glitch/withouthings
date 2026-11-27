@@ -893,7 +893,18 @@ final class WatchController: NSObject, ObservableObject, WatchLinkDelegate {
 
     // MARK: callbacks from the core
 
+    /// App-originated frames (polls, experiments, shortcuts, ECG...). Dropped while a firmware push is
+    /// streaming to that watch: in update mode the watch writes every received byte into the flash bank,
+    /// so a poll sent mid-push lands inside the image (11/26: corrupted bank B on the ScanWatch).
     fileprivate func send(_ id: UUID, _ frames: [Data]) {
+        if let u = units[id], u.service.firmwarePushBusy() {
+            AppLog.log("\(u.record.entity): \(frames.count) frame(s) held back, firmware push in progress")
+            return
+        }
+        sendCore(id, frames)
+    }
+    /// Frames from the Rust core, which gates itself during a push (only the push's own bytes pass).
+    fileprivate func sendCore(_ id: UUID, _ frames: [Data]) {
         if id == pairingId { frames.forEach(pairingRaw.toWatch) } else if let u = units[id] { frames.forEach(u.raw.toWatch) }
         link.write(id, frames)
     }
@@ -922,7 +933,7 @@ private final class ServiceTransport: Transport {
     weak var owner: WatchController?
     let id: UUID
     init(_ owner: WatchController, _ id: UUID) { self.owner = owner; self.id = id }
-    func write(frames: [Data]) { owner?.send(id, frames) }
+    func write(frames: [Data]) { owner?.sendCore(id, frames) }
     func changed() { owner?.coreChanged() }
     func reconnect() { owner?.coreWantsReconnect(id) }
 }
@@ -933,7 +944,7 @@ private final class PairTransport: Transport {
     // Called by the core from inside a BLE-queue call, so pairingId is safe to read here.
     func write(frames: [Data]) {
         guard let owner, let id = owner.pairingId else { return }
-        owner.send(id, frames)
+        owner.sendCore(id, frames)
     }
     func changed() {}
     func reconnect() {}
